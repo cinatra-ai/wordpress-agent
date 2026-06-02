@@ -1,0 +1,340 @@
+{
+  "agentspec_version": "26.1.0",
+  "component_type": "Flow",
+  "id": "wordpress-content-editor-flow",
+  "name": "WordPress Agent",
+  "description": "Creates and publishes content to a connected WordPress site.",
+  "metadata": {
+    "cinatra": {
+      "type": "node",
+      "packageName": "@cinatra-ai/wordpress-agent",
+      "packageVersion": "0.1.3"
+    }
+  },
+  "inputs": [
+    {
+      "title": "instanceId",
+      "type": "string"
+    },
+    {
+      "title": "postId",
+      "type": "string"
+    },
+    {
+      "title": "postType",
+      "type": "string"
+    },
+    {
+      "title": "postStatus",
+      "type": "string"
+    },
+    {
+      "title": "instructions",
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "title": "postId",
+      "type": "string"
+    },
+    {
+      "title": "changes",
+      "type": "array",
+      "json_schema": {
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "start_node": {
+    "$component_ref": "start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "start"
+    },
+    {
+      "$component_ref": "edit"
+    },
+    {
+      "$component_ref": "emit_output"
+    },
+    {
+      "$component_ref": "end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "start_to_edit",
+      "from_node": {
+        "$component_ref": "start"
+      },
+      "to_node": {
+        "$component_ref": "edit"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "edit_to_emit_output",
+      "from_node": {
+        "$component_ref": "edit"
+      },
+      "to_node": {
+        "$component_ref": "emit_output"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "emit_output_to_end",
+      "from_node": {
+        "$component_ref": "emit_output"
+      },
+      "to_node": {
+        "$component_ref": "end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_edit_instanceId",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "instanceId",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "instanceId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_edit_postId",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_edit_postType",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "postType",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "postType"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_edit_postStatus",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "postStatus",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "postStatus"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_edit_instructions",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "instructions",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "instructions"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "edit_to_end_postId",
+      "source_node": {
+        "$component_ref": "edit"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "edit_to_end_changes",
+      "source_node": {
+        "$component_ref": "edit"
+      },
+      "source_output": "changes",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "changes"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "edit_to_emit_output_postId",
+      "source_node": {
+        "$component_ref": "edit"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "edit_to_emit_output_changes",
+      "source_node": {
+        "$component_ref": "edit"
+      },
+      "source_output": "changes",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "changes"
+    }
+  ],
+  "$referenced_components": {
+    "start": {
+      "component_type": "StartNode",
+      "id": "start",
+      "name": "Inputs",
+      "inputs": [
+        {
+          "title": "instanceId",
+          "type": "string"
+        },
+        {
+          "title": "postId",
+          "type": "string"
+        },
+        {
+          "title": "postType",
+          "type": "string"
+        },
+        {
+          "title": "postStatus",
+          "type": "string"
+        },
+        {
+          "title": "instructions",
+          "type": "string"
+        }
+      ]
+    },
+    "edit": {
+      "component_type": "ApiNode",
+      "id": "edit",
+      "name": "Load + edit post",
+      "url": "{{CINATRA_BASE_URL}}/api/llm-bridge",
+      "http_method": "POST",
+      "data": {
+        "system": "You are the WordPress content editor. Apply user instructions to the specified post, handling draft workflow per SKILL.md.",
+        "user": "Execute the WordPress editing task now and return the result as JSON.\nInputs:\n- instanceId: {{ instanceId }}\n- postId: {{ postId }}\n- postType: {{ postType }}\n- postStatus: {{ postStatus }}\n- instructions: {{ instructions }}\n\nFollow the steps in SKILL.md. Return JSON: {\"postId\":\"...\",\"changes\":[{\"field\":\"...\",\"before\":\"...\",\"after\":\"...\"}]}",
+        "agent_id": "wordpress-content-editor",
+        "cinatra_llm": {
+          "preferredProvider": "openai",
+          "preferredModel": "gpt-5.5"
+        }
+      },
+      "inputs": [
+        {
+          "title": "instanceId",
+          "type": "string"
+        },
+        {
+          "title": "postId",
+          "type": "string"
+        },
+        {
+          "title": "postType",
+          "type": "string"
+        },
+        {
+          "title": "postStatus",
+          "type": "string"
+        },
+        {
+          "title": "instructions",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "title": "postId",
+          "type": "string"
+        },
+        {
+          "title": "changes",
+          "type": "array",
+          "json_schema": {
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      ],
+      "metadata": {
+        "cinatra": {
+          "riskClass": "write",
+          "requiresApproval": false,
+          "packageName": "@cinatra-ai/wordpress-agent"
+        }
+      }
+    },
+    "emit_output": {
+      "component_type": "OutputMessageNode",
+      "id": "emit_output",
+      "name": "Emit JSON output as agent message",
+      "inputs": [
+        {
+          "title": "postId",
+          "type": "string"
+        },
+        {
+          "title": "changes",
+          "type": "array",
+          "json_schema": {
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      ],
+      "message": "{# {{ changes }} #}{\"postId\":\"{{ postId }}\",\"changes\":{{ changes | tojson }}}"
+    },
+    "end": {
+      "component_type": "EndNode",
+      "id": "end",
+      "name": "Outputs",
+      "outputs": [
+        {
+          "title": "postId",
+          "type": "string"
+        },
+        {
+          "title": "changes",
+          "type": "array",
+          "json_schema": {
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
