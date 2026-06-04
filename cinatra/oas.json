@@ -8,7 +8,7 @@
     "cinatra": {
       "type": "node",
       "packageName": "@cinatra-ai/wordpress-agent",
-      "packageVersion": "0.1.3"
+      "packageVersion": "0.1.0"
     }
   },
   "inputs": [
