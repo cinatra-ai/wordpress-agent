@@ -4,6 +4,10 @@
   "license": "Apache-2.0",
   "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
   "type": "module",
+  "files": [
+    "cinatra",
+    "skills"
+  ],
   "cinatra": {
     "apiVersion": "cinatra.ai/v1",
     "kind": "agent",
