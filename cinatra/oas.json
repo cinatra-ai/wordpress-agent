@@ -8,7 +8,8 @@
     "cinatra": {
       "type": "node",
       "packageName": "@cinatra-ai/wordpress-agent",
-      "packageVersion": "0.1.0"
+      "packageVersion": "0.1.0",
+      "toolboxes": ["cinatra-mcp", "wordpress-mcp-connector"]
     }
   },
   "inputs": [
@@ -245,6 +246,7 @@
         "system": "You are the WordPress content editor. Apply user instructions to the specified post, handling draft workflow per SKILL.md.",
         "user": "Execute the WordPress editing task now and return the result as JSON.\nInputs:\n- instanceId: {{ instanceId }}\n- postId: {{ postId }}\n- postType: {{ postType }}\n- postStatus: {{ postStatus }}\n- instructions: {{ instructions }}\n\nFollow the steps in SKILL.md. Return JSON: {\"postId\":\"...\",\"changes\":[{\"field\":\"...\",\"before\":\"...\",\"after\":\"...\"}]}",
         "agent_id": "wordpress-content-editor",
+        "toolbox_ids": ["cinatra-mcp", "wordpress-mcp-connector"],
         "cinatra_llm": {
           "preferredProvider": "openai",
           "preferredModel": "gpt-5.5"
