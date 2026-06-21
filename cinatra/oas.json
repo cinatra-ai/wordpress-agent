@@ -31,6 +31,11 @@
     {
       "title": "instructions",
       "type": "string"
+    },
+    {
+      "title": "cinatra_run_id",
+      "type": "string",
+      "default": ""
     }
   ],
   "outputs": [
@@ -160,6 +165,18 @@
     },
     {
       "component_type": "DataFlowEdge",
+      "name": "start_cinatra_run_id_to_edit_agent_run_id",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "cinatra_run_id",
+      "destination_node": {
+        "$component_ref": "edit"
+      },
+      "destination_input": "agent_run_id"
+    },
+    {
+      "component_type": "DataFlowEdge",
       "name": "edit_to_end_postId",
       "source_node": {
         "$component_ref": "edit"
@@ -212,6 +229,11 @@
       "component_type": "StartNode",
       "id": "start",
       "name": "Inputs",
+      "metadata": {
+        "cinatra": {
+          "hidden": ["cinatra_run_id"]
+        }
+      },
       "inputs": [
         {
           "title": "instanceId",
@@ -232,6 +254,11 @@
         {
           "title": "instructions",
           "type": "string"
+        },
+        {
+          "title": "cinatra_run_id",
+          "type": "string",
+          "default": ""
         }
       ]
     },
@@ -245,6 +272,7 @@
         "system": "You are the WordPress content editor. Apply user instructions to the specified post, handling draft workflow per SKILL.md.",
         "user": "Execute the WordPress editing task now and return the result as JSON.\nInputs:\n- instanceId: {{ instanceId }}\n- postId: {{ postId }}\n- postType: {{ postType }}\n- postStatus: {{ postStatus }}\n- instructions: {{ instructions }}\n\nFollow the steps in SKILL.md. Return JSON: {\"postId\":\"...\",\"changes\":[{\"field\":\"...\",\"before\":\"...\",\"after\":\"...\"}]}",
         "agent_id": "wordpress-content-editor",
+        "agent_run_id": "{{ agent_run_id }}",
         "cinatra_llm": {
           "preferredProvider": "openai",
           "preferredModel": "gpt-5.5"
@@ -269,6 +297,10 @@
         },
         {
           "title": "instructions",
+          "type": "string"
+        },
+        {
+          "title": "agent_run_id",
           "type": "string"
         }
       ],
