@@ -16,8 +16,8 @@
         "packageName": "@cinatra-ai/wordpress-mcp-connector",
         "edgeType": "runtime",
         "versionConstraint": {
-          "kind": "exact",
-          "version": "0.1.4"
+          "kind": "semver-range",
+          "range": "^0.1.4"
         },
         "requirement": "required",
         "kind": "connector"
