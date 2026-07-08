@@ -11,6 +11,7 @@
   "cinatra": {
     "apiVersion": "cinatra.ai/v1",
     "kind": "agent",
+    "displayName": "WordPress Agent",
     "dependencies": [
       {
         "packageName": "@cinatra-ai/wordpress-mcp-connector",
@@ -48,6 +49,15 @@
         "primitive": "wordpress_post_status",
         "requirement": "required"
       }
-    ]
+    ],
+    "packageType": "agent",
+    "manifestVersion": 1,
+    "sourceTemplateId": "wordpress-content-editor-flow",
+    "sourceVersionId": "2cecbcb9-2163-4938-a523-ed2d178364a3",
+    "sourceVersionNumber": 1,
+    "riskLevel": "low",
+    "hasApprovalGates": false,
+    "toolAccess": [],
+    "ownerOrgId": null
   }
 }
