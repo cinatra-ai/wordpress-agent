@@ -1,6 +1,6 @@
 # wordpress-agent — AGENTS.md
 
-Agent-specific guidance for `@cinatra/wordpress-agent`. Read alongside the repo-root `AGENTS.md` and the skill file at `skills/wordpress-agent/SKILL.md`.
+Agent-specific guidance for `@cinatra/wordpress-agent`. Read alongside the repo-root `AGENTS.md` and the agent instructions in `cinatra/oas.json` (the `edit` node's `data.system`).
 
 ## Agent role
 
@@ -41,14 +41,14 @@ The caller reads this from `task.history` (not `task.artifacts`) — WayFlow's `
 
 ## Draft-revision workflow — CRITICAL asymmetry with Drupal
 
-WordPress lacks a true draft-revision API. The SKILL.md enforces a **demote-then-edit** pattern:
+WordPress lacks a true draft-revision API. The agent prompt enforces a **demote-then-edit** pattern:
 
 1. `wordpress_post_get` → read current content (including `content` field — required for before/after diff)
 2. If `postStatus === "publish"` → `wordpress_post_update(status: "draft")` — demotes the live post (the live revision is preserved in WordPress's revision history, but the front-of-site copy becomes a draft)
 3. `wordpress_post_update` → apply field changes
 4. Return diff JSON
 
-**Do NOT add a `wordpress_post_create_draft_revision` primitive.** There is no WordPress REST API equivalent to Drupal's draft revision endpoint. The agent's SKILL.md explicitly forbids calling `wordpress_post_create_draft_revision` to prevent the LLM from attempting to call a non-existent primitive.
+**Do NOT add a `wordpress_post_create_draft_revision` primitive.** There is no WordPress REST API equivalent to Drupal's draft revision endpoint. The agent prompt explicitly forbids calling `wordpress_post_create_draft_revision` to prevent the LLM from attempting to call a non-existent primitive.
 
 ## MCP primitives used
 
@@ -59,7 +59,7 @@ WordPress lacks a true draft-revision API. The SKILL.md enforces a **demote-then
 | `wordpress_post_update_meta` | Update only `meta` (legacy; use `wordpress_post_update` for new work) |
 | `wordpress_post_status` | Check publish status / get admin URL |
 
-`wordpress_post_create_draft` is forbidden by SKILL.md — never call it. Creating new posts is outside the scope of this agent.
+`wordpress_post_create_draft` is forbidden by the agent prompt — never call it. Creating new posts is outside the scope of this agent.
 
 ## Timeout
 
