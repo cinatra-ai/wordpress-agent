@@ -1,6 +1,6 @@
 {
   "name": "@cinatra-ai/wordpress-agent",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "license": "Apache-2.0",
   "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
   "type": "module",
@@ -25,28 +25,12 @@
     ],
     "consumes": [
       {
-        "primitive": "wordpress_post_get",
+        "primitive": "wordpress_site_tool_call",
         "requirement": "required"
       },
       {
-        "primitive": "wordpress_post_update",
-        "requirement": "required"
-      },
-      {
-        "primitive": "wordpress_post_update_meta",
-        "requirement": "required"
-      },
-      {
-        "primitive": "wordpress_post_create_draft",
-        "requirement": "required"
-      },
-      {
-        "primitive": "wordpress_post_delete",
-        "requirement": "required"
-      },
-      {
-        "primitive": "wordpress_post_status",
-        "requirement": "required"
+        "primitive": "wordpress_site_tools_list",
+        "requirement": "optional"
       }
     ],
     "packageType": "agent",
