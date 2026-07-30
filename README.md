@@ -8,13 +8,13 @@ Edit a post on a connected WordPress site from a plain-language instruction — 
 
 **Configuration.** Supply `instanceId` (your registered WordPress instance), `postId`, `postType` (`post`, the default; `page` is read-only), `postStatus` (`publish` or `draft`), and a plain-language `instructions` string.
 
-**Usage.** Trigger via the Cinatra content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. For a published post the agent demotes it to draft before applying changes; for a draft it writes directly. Both paths return `changes`: `[{ "field": "title", "before": "...", "after": "..." }]`.
+**Usage.** Trigger via the Cinatra content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. For a published post the agent demotes it to draft before applying changes; for a draft it writes directly.
 
 **Development.** Start the local stack with `docker compose --profile wordpress up -d`. Runs on port 3021; override with `WP_CONTENT_EDITOR_A2A_URL` in `.env.local`.
 
-**API contract.** Inputs: `instanceId`, `postId`, `postType`, `postStatus`, `instructions` (all strings). Output: `postId`, a `proposalId` correlation id, and a `changes` array of `{field, before, after}` objects; a published-post edit also emits a status change entry. An unsupported request (e.g. a page edit) returns empty `changes` plus an `error` object with a machine-readable `code`.
+**API contract.** Inputs: `instanceId`, `postId`, `postType`, `postStatus`, `instructions` (all strings). Success: `postId`, `instanceId`, `proposalId` (required), optional `changeSetId`, and `changes: [{field, before, after}]`; a demote also adds a status entry. Failure: empty `changes` plus `error.code` — `unsupported_post_type` / `page_editing_unsupported` / `call_failed` (no `proposalId`) or `reread_failed` (write DID save; `proposalId` included).
 
-**Troubleshooting.** A `500` on the edit step usually means `instanceId` does not match a registered WordPress connection — verify it in workspace settings. Empty `changes` means no fields were modified; check that `instructions` names a field present on the post.
+**Troubleshooting.** A `500` usually means `instanceId` doesn't match a registered connection — check workspace settings. Empty `changes` alone isn't proof of a no-op — check `error` first (absent = no matching field; present = failed, or for `reread_failed`, saved but unconfirmed).
 
 ## Works with
 - WordPress

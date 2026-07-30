@@ -1,6 +1,6 @@
 {
   "name": "@cinatra-ai/wordpress-agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "Apache-2.0",
   "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
   "type": "module",
