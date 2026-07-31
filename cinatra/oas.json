@@ -489,7 +489,7 @@
           "type": "object"
         }
       ],
-      "message": "{# {{ changes }} {{ error }} #}{\"postId\":{{ postId | tojson }},\"instanceId\":{{ instanceId | tojson }}{% if proposalId %},\"proposalId\":{{ proposalId | tojson }}{% endif %}{% if changeSetId %},\"changeSetId\":{{ changeSetId | tojson }}{% endif %},\"changes\":{{ changes | tojson }}{% if error %},\"error\":{{ error | tojson }}{% endif %}}"
+      "message": "{# Property-scanner workaround: the mount-time input scanner only recognizes a plain, unfiltered, unconditional double-curly-brace reference to a variable — it misses references that pipe through a filter (tojson below) or that only live inside a conditional block. Every input this node declares must therefore also appear once below in that plain form, or mounting fails with an OutputMessageNode validation error even though the body already uses the value. {{ changes }} {{ error }} {{ postId }} {{ instanceId }} {{ proposalId }} {{ changeSetId }} #}{\"postId\":{{ postId | tojson }},\"instanceId\":{{ instanceId | tojson }}{% if proposalId %},\"proposalId\":{{ proposalId | tojson }}{% endif %}{% if changeSetId %},\"changeSetId\":{{ changeSetId | tojson }}{% endif %},\"changes\":{{ changes | tojson }}{% if error %},\"error\":{{ error | tojson }}{% endif %}}"
     },
     "end": {
       "component_type": "EndNode",
