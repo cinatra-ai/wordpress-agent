@@ -1,6 +1,6 @@
 {
   "name": "@cinatra-ai/wordpress-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
   "type": "module",
@@ -33,6 +33,9 @@
         "requirement": "optional"
       }
     ],
+    "lifecycle": {
+      "repairCapable": true
+    },
     "packageType": "agent",
     "manifestVersion": 1,
     "sourceTemplateId": "wordpress-content-editor-flow",
