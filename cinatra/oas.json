@@ -437,13 +437,34 @@
           "type": "array",
           "json_schema": {
             "items": {
-              "type": "object"
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "before": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": "string"
+                }
+              }
             }
           }
         },
         {
           "title": "error",
-          "type": "object"
+          "type": "object",
+          "json_schema": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       ],
       "metadata": {
