@@ -24,6 +24,16 @@
         },
         "requirement": "required",
         "kind": "connector"
+      },
+      {
+        "packageName": "@cinatra-ai/cms-snapshot-artifact",
+        "edgeType": "runtime",
+        "versionConstraint": {
+          "kind": "semver-range",
+          "range": "^0.1.0"
+        },
+        "requirement": "required",
+        "kind": "artifact"
       }
     ],
     "consumes": [
@@ -34,6 +44,18 @@
       {
         "primitive": "wordpress_site_tools_list",
         "requirement": "optional"
+      }
+    ],
+    "produces": [
+      {
+        "extension": "@cinatra-ai/cms-snapshot-artifact",
+        "objectTypeId": "@cinatra-ai/cms-snapshot-artifact:cms-page"
+      }
+    ],
+    "tools": [
+      {
+        "name": "review_targets",
+        "module": "./cinatra/tools/review-targets.mjs"
       }
     ],
     "lifecycle": {
