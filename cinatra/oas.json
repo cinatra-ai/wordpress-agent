@@ -13,23 +13,30 @@
   "inputs": [
     {
       "title": "instanceId",
-      "type": "string"
+      "type": "string",
+      "description": "Enter the connected WordPress instance ID. The WordPress content-editor relay normally supplies this ID from the current site."
     },
     {
       "title": "postId",
-      "type": "string"
+      "type": "string",
+      "description": "Enter the WordPress post ID to edit. The WordPress content-editor relay normally supplies this ID from the open post."
     },
     {
       "title": "postType",
-      "type": "string"
+      "type": "string",
+      "description": "The post type to read: post or page. If omitted, post is used; pages can be read but cannot be edited by this agent.",
+      "default": "post"
     },
     {
       "title": "postStatus",
-      "type": "string"
+      "type": "string",
+      "description": "Optional caller status hint. The agent reads the current status from WordPress before editing; a blank hint does not change that decision.",
+      "default": ""
     },
     {
       "title": "instructions",
-      "type": "string"
+      "type": "string",
+      "description": "Describe the changes to make to this post, naming the text or fields to change and the desired result."
     },
     {
       "title": "cinatra_run_id",
@@ -755,29 +762,41 @@
       "name": "Inputs",
       "metadata": {
         "cinatra": {
-          "hidden": ["cinatra_run_id"]
+          "hidden": ["cinatra_run_id"],
+          "required": [
+            "instanceId",
+            "postId",
+            "instructions"
+          ]
         }
       },
       "inputs": [
         {
           "title": "instanceId",
-          "type": "string"
+          "type": "string",
+          "description": "Enter the connected WordPress instance ID. The WordPress content-editor relay normally supplies this ID from the current site."
         },
         {
           "title": "postId",
-          "type": "string"
+          "type": "string",
+          "description": "Enter the WordPress post ID to edit. The WordPress content-editor relay normally supplies this ID from the open post."
         },
         {
           "title": "postType",
-          "type": "string"
+          "type": "string",
+          "description": "The post type to read: post or page. If omitted, post is used; pages can be read but cannot be edited by this agent.",
+          "default": "post"
         },
         {
           "title": "postStatus",
-          "type": "string"
+          "type": "string",
+          "description": "Optional caller status hint. The agent reads the current status from WordPress before editing; a blank hint does not change that decision.",
+          "default": ""
         },
         {
           "title": "instructions",
-          "type": "string"
+          "type": "string",
+          "description": "Describe the changes to make to this post, naming the text or fields to change and the desired result."
         },
         {
           "title": "cinatra_run_id",
