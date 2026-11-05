@@ -59,7 +59,10 @@
       }
     ],
     "lifecycle": {
-      "repairCapable": true
+      "repairCapable": true,
+      "repairFindingsInput": {
+        "input": "instructions"
+      }
     },
     "packageType": "agent",
     "manifestVersion": 1,
