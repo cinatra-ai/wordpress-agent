@@ -26,7 +26,7 @@
         "kind": "connector"
       },
       {
-        "packageName": "@cinatra-ai/cms-snapshot-artifact",
+        "packageName": "@cinatra-ai/website-artifacts",
         "edgeType": "runtime",
         "versionConstraint": {
           "kind": "semver-range",
@@ -48,8 +48,8 @@
     ],
     "produces": [
       {
-        "extension": "@cinatra-ai/cms-snapshot-artifact",
-        "objectTypeId": "@cinatra-ai/cms-snapshot-artifact:cms-page"
+        "extension": "@cinatra-ai/website-artifacts",
+        "objectTypeId": "@cinatra-ai/website-artifacts:page-snapshot"
       }
     ],
     "tools": [
