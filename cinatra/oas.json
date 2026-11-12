@@ -1090,8 +1090,8 @@
       "data": {
         "tool": "artifact_materialize",
         "input": {
-          "extension": "@cinatra-ai/cms-snapshot-artifact",
-          "objectTypeId": "@cinatra-ai/cms-snapshot-artifact:cms-page",
+          "extension": "@cinatra-ai/website-artifacts",
+          "objectTypeId": "@cinatra-ai/website-artifacts:page-snapshot",
           "declaredMime": "application/json",
           "title": "{{ pageTitle }}",
           "content": "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",

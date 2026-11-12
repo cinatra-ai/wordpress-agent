@@ -19,8 +19,8 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const parts = oas.$referenced_components;
 
 const PACKAGE = "@cinatra-ai/wordpress-agent";
-const SNAPSHOT_EXTENSION = "@cinatra-ai/cms-snapshot-artifact";
-const SNAPSHOT_TYPE = "@cinatra-ai/cms-snapshot-artifact:cms-page";
+const SNAPSHOT_EXTENSION = "@cinatra-ai/website-artifacts";
+const SNAPSHOT_TYPE = "@cinatra-ai/website-artifacts:page-snapshot";
 const LLM_BRIDGE_PATH = "/api/llm-bridge";
 const GATE = "page_review_gate";
 const EXAMPLE_BEGIN = "BEGIN EXAMPLE FORM";
