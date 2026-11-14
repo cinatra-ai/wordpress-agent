@@ -71,3 +71,20 @@ test("W5: the package consumes both site tools", () => {
     ],
   );
 });
+
+test("W6: AGENTS.md names the write tool where it describes the write path", () => {
+  const doc = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
+  const docSection = (from) => doc.split(from)[1]?.split("\n## ")[0] ?? "";
+  const gap = docSection("## KNOWN GAP");
+  const role = docSection("## Agent role");
+  assert.ok(gap.length > 0 && role.length > 0, "the known-gap and role sections exist");
+  // The release gate (item 2) is about a write: it must name the write tool,
+  // and no sentence of AGENTS.md may send a write through the read tool.
+  const gateItem = gap.split("\n").find((line) => line.startsWith("2. ")) ?? "";
+  assert.ok(gateItem.includes(WRITE_TOOL), "the review-before-publish gate item names the write tool");
+  assert.doesNotMatch(doc, /writes?\b[^.\n]{0,60}through `wordpress_site_tool_call`/, "no write goes through the read tool");
+  // The allowlist item (3) must admit both primitives, not only the read tool.
+  const allowItem = gap.split("\n").find((line) => line.startsWith("3. ")) ?? "";
+  assert.ok(allowItem.includes(READ_TOOL) && allowItem.includes(WRITE_TOOL), "the allowlist item names both tools");
+  assert.ok(role.includes(READ_TOOL) && role.includes(WRITE_TOOL), "the role text names both tools");
+});
