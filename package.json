@@ -42,6 +42,10 @@
         "requirement": "required"
       },
       {
+        "primitive": "wordpress_site_tool_write",
+        "requirement": "required"
+      },
+      {
         "primitive": "wordpress_site_tools_list",
         "requirement": "optional"
       }

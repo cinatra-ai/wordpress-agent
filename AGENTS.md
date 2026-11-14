@@ -83,13 +83,13 @@ WordPress lacks a true draft-revision API. The agent prompt enforces a **demote-
 
 ## MCP primitives used (cinatra-ai/cinatra#2022 S7 — generic invoker cutover)
 
-This agent has exactly ONE WordPress MCP primitive: `wordpress_site_tool_call` (plus `wordpress_site_tools_list`, declared optional, unused by the current flow). There are no `wordpress_post_*` named tools anymore — every WordPress call goes through `wordpress_site_tool_call({ instanceId, toolName, args })`, which forwards `args` unmodified to the target site's own MCP ability and returns that ability's raw response (`{ success, data }`) unwrapped by nothing in between.
+This agent has two WordPress MCP call primitives: the read tool `wordpress_site_tool_call` and the write tool `wordpress_site_tool_write` (plus `wordpress_site_tools_list`, declared optional, unused by the current flow). There are no `wordpress_post_*` named tools anymore — every WordPress call goes through `wordpress_site_tool_call({ instanceId, toolName, args })` (reads only; it refuses an ability that writes) or `wordpress_site_tool_write({ instanceId, toolName, args })` (writes; on an agent run each call waits for the person's recorded decision). Both forward `args` unmodified to the target site's own MCP ability and returns that ability's raw response (`{ success, data }`) unwrapped by nothing in between.
 
 | `toolName` | Purpose |
 |---|---|
 | `ewpa/get-post` | Read a post by id (`args: { post_id }`) — required for before/after diffs |
 | `ewpa/get-page` | Read a page by id (`args: { post_id }`) — used instead of `ewpa/get-post` only when `postType === "page"` |
-| `ewpa/update-post` | Update a post's top-level fields (`args: { post_id, title?, content?, excerpt?, status? }`) — supports `postType === "post"` (default) ONLY; there is no proven page-update or meta-update ability behind this cutover (see below) |
+| `ewpa/update-post` | Via `wordpress_site_tool_write`. Update a post's top-level fields (`args: { post_id, title?, content?, excerpt?, status? }`) — supports `postType === "post"` (default) ONLY; there is no proven page-update or meta-update ability behind this cutover (see below) |
 
 `ewpa/create-post` is forbidden by the agent prompt — never call it. Creating new posts is outside the scope of this agent.
 
