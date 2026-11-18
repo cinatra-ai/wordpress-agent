@@ -13,31 +13,36 @@
 // hold the failure contract (Step 0 answers `unsupported_post_type` before any
 // WordPress call; the empty code on a success; `unsupported_post_type` for a
 // postType rejected in Step 0 and `call_failed` for a failed envelope or a
-// missing content field in Step 1) and NOTHING ELSE: the whole instruction
-// text is pinned word for word, so no added, changed or removed sentence can
-// forbid, swap or redirect a code, empty the code after a failure or tell the
-// step to go on; the rest of the step (name, inputs, outputs and their
-// schemas, metadata) is pinned too; and no step but the write step (which
+// missing content field in Step 1) and NOTHING ELSE: the instructions and the
+// input template are pinned byte for byte (see below), so no added, changed,
+// moved or removed character can forbid, swap or redirect a code, weaken a
+// rule for a failed envelope or for missing content, empty the code after a
+// failure, invert a condition or tell the step to go on; the rest of the step
+// (name, inputs, outputs and their schemas, metadata) is pinned too, the
+// step's data holds no other key, and no step but the write step (which
 // answers its own codes of the same names, and runs only after the read)
-// names those codes; R2 the
-// read step lists no completed code and no model step lists a code the read
-// step answers; R3 every step after the read, the review, write, output and
-// end steps among them, is reached only through the read step (the walk
-// names no step but the read step, so a renamed step passes), and every
-// control edge names both of its ends.
+// names those codes; R2 the read step lists no completed code and no model
+// step lists a code the read step answers; R3 every step after the read, the
+// review, write, output and end steps among them, is reached only through the
+// read step (the walk names no step but the read step, so a renamed step
+// passes), and every control edge names both of its ends.
 //
-// R1 compares WORDS, not characters: case, white space, line breaks,
-// backticks, quotes, bold, heading and list marks and punctuation are
-// formatting and may change freely; letters (of any script), digits and the
-// operator marks = ! < > ~ are words. A changed word of the read step's
-// instructions fails R1 on purpose, also when it is harmless: a reworded
-// instruction is a new contract, so the pinned text below changes with it,
-// in the same reviewed diff.
+// R1 is an allow-list over ALL of the text, never a deny-list over classes of
+// characters: the only change it forgives is the length of a run of white
+// space (space, tab, carriage return, line feed), which collapses to one
+// space before the comparison. Case, punctuation, symbols, quotes, backticks,
+// list, heading and bold marks, sentence boundaries, letters of every script,
+// every other character (any non-ASCII one, zero-width and other-width white
+// space included) and any text before, after or between the pinned words
+// count: a reformat or a rewording fails on purpose, also when it is
+// harmless. Changing the flow's instructions means changing the pinned text
+// and its named sha256 below, in the same reviewed diff.
 //
 // Zero-dependency; runs on plain node:test (`node --test`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -54,75 +59,85 @@ const WRITE = "edit";
 const FAILURE_CODES = ["unsupported_post_type", "call_failed"];
 const NAMES_A_FAILURE_CODE = /unsupported[\s_-]*post[\s_-]*type|call[\s_-]*failed/i;
 
-// The words of a text, in order: what R1 compares.
-const wordsOf = (text) =>
-  (text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}\p{M}]+(?:[-_][\p{L}\p{N}\p{M}]+)*|[=!<>~]+/gu) ?? []).join(" ");
-// The sentences of a text, as words: only to name what differs.
-const sentencesOf = (text) => text.split(/\n|(?<=[.!?])\s+/).map(wordsOf).filter((s) => s !== "");
+// What R1 compares: runs of space, tab, CR and LF become one space; nothing else is normalised.
+const collapse = (text) => text.replace(/[ \t\r\n]+/g, " ");
+const sha256Of = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+// Where two collapsed texts first differ, for the failure message.
+const firstDifference = (got, pinned) => {
+  let at = 0;
+  while (at < got.length && at < pinned.length && got[at] === pinned[at]) at += 1;
+  const cut = (text) => JSON.stringify(text.slice(Math.max(0, at - 30), at + 50));
+  return `at character ${at}: the flow has ${cut(got)}, the pin has ${cut(pinned)}`;
+};
+// Every character outside printable ASCII (white space of the four kinds aside), as code points.
+const nonAsciiOf = (text) =>
+  [...new Set(text.match(/[^\x20-\x7e\t\r\n]/gu) ?? [])]
+    .map((ch) => `U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`)
+    .sort();
+// The only non-ASCII character of the read step's texts: the em dash of Step 0 and of Rule 2.
+const NON_ASCII_ALLOWED = ["U+2014"];
 
-// The failure contract, as words: the Step 0 sentence, and the success and failure sentences of the result.
+// The failure contract: the Step 0 sentence, and the success and failure sentences of the result.
 const STEP0 =
-  "step 0 validate posttype before any wordpress call if posttype is anything other than unset post or page " +
-  "make no wordpress call at all answer the result below with error code unsupported_post_type";
-const SUCCESS = "on a successful read error carries the empty string in code and in message";
+  "If `postType` is anything other than unset, `\"post\"`, or `\"page\"`, make NO WordPress call at all \u2014 " +
+  "answer the result below with `error.code` `\"unsupported_post_type\"`.";
+const SUCCESS = "On a successful read, `error` carries the empty string in `code` and in `message`.";
 const ASSIGN =
-  "on a failure title content excerpt status and address are the empty string and error is code message " +
-  "code is unsupported_post_type for a posttype rejected in step 0 and " +
-  "call_failed for a failed envelope or a missing content field in step 1 " +
-  "and message is a short plain-language explanation";
+  "On a failure, `title`, `content`, `excerpt`, `status` and `address` are the empty string and `error` is `{ code, message }`: " +
+  "`code` is `\"unsupported_post_type\"` for a postType rejected in Step 0 and " +
+  "`\"call_failed\"` for a failed envelope or a missing content field in Step 1, and `message` is a short plain-language explanation.";
 
-// The read step's whole instructions, as words, one sentence per item.
+// The pin: the read step's instructions and its input template, one line of the flow's text per item, as the flow
+// holds them (the em dash is written as a u-escape, so this file stays ASCII). R1 compares the flow's text with it byte
+// for byte once runs of white space are collapsed; the sha256 of the collapsed pinned text is named next to it, so a
+// changed pin shows in the diff as a changed text AND a changed digest.
 const READ_SYSTEM = [
-  "you are the wordpress page reader",
-  "read the specified post or page and hand its current fields to the next step",
-  "you make no change to the site",
-  "how you reach wordpress",
-  "you do not have any wordpress_post tools",
-  "you have exactly one wordpress call primitive wordpress_site_tool_call which forwards a toolname args to the connected site s own mcp ability catalog and returns that ability s raw response unchanged an envelope shaped success boolean data on success",
-  "you also have wordpress_site_tools_list to discover the site s catalog but for this step you never need it the two abilities below are always the right ones",
-  "call these two abilities always via wordpress_site_tool_call with instanceid from the inputs toolname and args",
-  "ewpa get-post read a post by id",
-  "args post_id < number >",
-  "ewpa get-page read a page by id",
-  "args post_id < number >",
-  "use this instead of ewpa get-post only when posttype === page",
-  "these two reads are the only wordpress calls this step makes",
-  "rules",
-  "1",
-  "every post_id you send must be a number not a string the inputs give you postid as a string e g",
-  "42 convert it before including it in any args",
-  "2",
-  "every response is an envelope check success first a response where success is not exactly true is a failure stop and report the error rather than proceeding as if it succeeded",
-  "a response missing the success key entirely is also a failure never an implicit success",
-  "3",
-  "read fields from the envelope s data object with this fallback order and never invent a value for a field that is absent from every name in its list",
-  "id data id then data id then data post_id",
-  "title data post_title then data title",
-  "content data post_content then data content required for the diff if neither key is present stop and report an error",
-  "never treat missing content as an empty string that silently wipes the diff not just this read",
-  "excerpt data post_excerpt then data excerpt",
-  "status data post_status then data status",
-  "address data permalink then data link the post s own public address the empty string when neither is present",
-  "steps",
-  STEP0,
-  "only unset post full edit support and page read-only rule 6 proceed",
-  "step 1 load post call wordpress_site_tool_call with toolname ewpa get-post or ewpa get-page when posttype === page and args post_id < postid as a number >",
-  "check success === true rule 2",
-  "read title content excerpt status address per rule 3",
-  "the result",
-  "fill the declared output fields postid instanceid and posttype as the inputs gave them title content excerpt and status exactly as read rule 3 the empty string for an absent excerpt address per rule 3 and error",
-  SUCCESS,
-  ASSIGN,
-  "never invent a value for a field that is absent from every name in its list",
-];
+  "You are the WordPress page reader. Read the specified post (or page) and hand its current fields to the next step. You make no change to the site.",
+  "",
+  "## How you reach WordPress",
+  "",
+  "You do not have any `wordpress_post_*` tools. You have exactly one WordPress call primitive, `wordpress_site_tool_call`, which forwards a `toolName` + `args` to the connected site's own MCP ability catalog and returns that ability's raw response UNCHANGED \u2014 an envelope shaped `{ \"success\": boolean, \"data\": {...} }` on success. You also have `wordpress_site_tools_list` to discover the site's catalog, but for this step you never need it \u2014 the two abilities below are always the right ones.",
+  "",
+  "Call these two abilities, always via `wordpress_site_tool_call` with `instanceId` (from the inputs), `toolName`, and `args`:",
+  "- `ewpa/get-post` \u2014 read a post by id. `args: { post_id: <number> }`",
+  "- `ewpa/get-page` \u2014 read a page by id. `args: { post_id: <number> }`. Use this INSTEAD of `ewpa/get-post` only when `postType === \"page\"`.",
+  "",
+  "These two reads are the only WordPress calls this step makes.",
+  "",
+  "## Rules",
+  "",
+  "1. **Every `post_id` you send must be a number, not a string.** The inputs give you `postId` as a string (e.g. `\"42\"`) \u2014 convert it before including it in any `args`.",
+  "2. **Every response is an envelope: check `success` first.** A response where `success` is not EXACTLY `true` is a failure \u2014 stop and report the error rather than proceeding as if it succeeded. A response missing the `success` key entirely is also a failure, never an implicit success.",
+  "3. **Read fields from the envelope's `data` object with this fallback order, and never invent a value for a field that is absent from every name in its list:**",
+  "   - id: `data.ID`, then `data.id`, then `data.post_id`",
+  "   - title: `data.post_title`, then `data.title`",
+  "   - content: `data.post_content`, then `data.content` \u2014 REQUIRED for the diff; if NEITHER key is present, stop and report an error. Never treat missing content as an empty string \u2014 that silently wipes the diff, not just this read.",
+  "   - excerpt: `data.post_excerpt`, then `data.excerpt`",
+  "   - status: `data.post_status`, then `data.status`",
+  "   - address: `data.permalink`, then `data.link` \u2014 the post's own public address; the empty string when neither is present.",
+  "",
+  "## Steps",
+  "",
+  "**STEP 0 \u2014 Validate postType BEFORE any WordPress call:** If `postType` is anything other than unset, `\"post\"`, or `\"page\"`, make NO WordPress call at all \u2014 answer the result below with `error.code` `\"unsupported_post_type\"`. Only unset/`\"post\"` (full edit support) and `\"page\"` (read-only, Rule 6) proceed.",
+  "",
+  "**STEP 1 \u2014 Load post:** Call `wordpress_site_tool_call` with `toolName: \"ewpa/get-post\"` (or `\"ewpa/get-page\"` when `postType === \"page\"`) and `args: { post_id: <postId as a number> }`. Check `success === true` (Rule 2). Read title/content/excerpt/status/address per Rule 3.",
+  "",
+  "## The result",
+  "",
+  "Fill the declared output fields: `postId`, `instanceId` and `postType` as the inputs gave them; `title`, `content`, `excerpt` and `status` exactly as read (Rule 3; the empty string for an absent excerpt); `address` per Rule 3; and `error`. On a successful read, `error` carries the empty string in `code` and in `message`. On a failure, `title`, `content`, `excerpt`, `status` and `address` are the empty string and `error` is `{ code, message }`: `code` is `\"unsupported_post_type\"` for a postType rejected in Step 0 and `\"call_failed\"` for a failed envelope or a missing content field in Step 1, and `message` is a short plain-language explanation. Never invent a value for a field that is absent from every name in its list.",
+].join("\n");
+const READ_SYSTEM_SHA256 = "a7288c77d29d5b08828a43fd4e54b75c69f04200c1c5cc23f3687e2f6de5086f";
 const READ_USER = [
-  "read the wordpress post now and fill the declared output fields",
-  "inputs",
-  "instanceid instanceid",
-  "postid postid",
-  "posttype posttype",
-  "follow the steps in the system instructions",
-];
+  "Read the WordPress post now and fill the declared output fields.",
+  "Inputs:",
+  "- instanceId: {{ instanceId }}",
+  "- postId: {{ postId }}",
+  "- postType: {{ postType }}",
+  "",
+  "Follow the steps in the system instructions.",
+].join("\n");
+const READ_USER_SHA256 = "67272b24a94ba5c98c55cfcff82b679ba98bbd87c8cf3e66616ce2d9e2a4e1fd";
+
 // The keys of the read step's data: a new key could carry an instruction R1 does not read.
 const READ_DATA_KEYS = ["agent_id", "agent_run_id", "cinatra_llm", "system", "user"];
 // The rest of the read step (its name, inputs, outputs and their schemas, metadata; the data without the two texts
@@ -154,14 +169,15 @@ const READ_STEP_REST = {
   metadata: { cinatra: { riskClass: "read_only", requiresApproval: false, packageName: "@cinatra-ai/wordpress-agent", description: "The agent reads the page." } },
 };
 
-// Fails unless the words of `text` are exactly the pinned sentences; names the sentences that differ.
-const assertWords = (text, pinned, what) => {
-  const got = sentencesOf(text);
+// Fails unless `text` is the pinned text byte for byte once runs of white space are collapsed.
+const assertPinned = (text, pinned, sha256, what) => {
+  const want = collapse(pinned);
+  assert.equal(sha256Of(want), sha256, `${what}: the pinned text and its named sha256 belong together (change both, on purpose)`);
+  const got = collapse(text);
   assert.ok(
-    wordsOf(text) === pinned.join(" "),
-    `${what} are exactly the pinned instructions; ` +
-      `added or changed: ${JSON.stringify(got.filter((s) => !pinned.includes(s)))}; ` +
-      `missing or changed: ${JSON.stringify(pinned.filter((s) => !got.includes(s)))}`,
+    got === want,
+    `${what} are the pinned text byte for byte once runs of white space are collapsed; ` +
+      `the flow's text has sha256 ${sha256Of(got)}, the pin names ${sha256}; first difference ${firstDifference(got, want)}`,
   );
 };
 
@@ -204,34 +220,37 @@ test("R1: the read step assigns each failure code to its failure condition, by i
   assert.deepEqual({ ...node, data: dataRest }, READ_STEP_REST, "the read step's name, inputs, outputs, schemas and metadata are the pinned ones");
   assert.deepEqual(Object.keys(llm ?? {}).sort(), ["preferredModel", "preferredProvider"], "the model choice has its two keys");
   for (const value of Object.values(llm)) assert.match(value, /^[\w.:\/-]+$/, "the model choice holds names only");
-  const words = wordsOf(data.system);
+  // Any non-ASCII character is named: the em dash of Step 0 and of Rule 2 is the only one the texts may hold.
+  assert.deepEqual(nonAsciiOf(data.system), NON_ASCII_ALLOWED, "the instructions hold no non-ASCII character but the em dash");
+  assert.deepEqual(nonAsciiOf(data.user), [], "the input template holds no non-ASCII character");
+  assert.deepEqual(nonAsciiOf(READ_SYSTEM), NON_ASCII_ALLOWED, "the pinned instructions hold no non-ASCII character but the em dash");
+  assert.deepEqual(nonAsciiOf(READ_USER), [], "the pinned input template holds no non-ASCII character");
+  const text = collapse(data.system);
   // The contract, named.
   assert.ok(
-    words.includes(STEP0),
+    text.includes(STEP0),
     "the instructions send a rejected postType to the answer with the code of Step 0, before any WordPress call",
   );
+  assert.ok(text.includes(SUCCESS), "a successful read answers the empty code, so a success is never stopped");
   assert.ok(
-    words.includes(SUCCESS),
-    "a successful read answers the empty code, so a success is never stopped",
-  );
-  assert.ok(
-    words.includes(ASSIGN),
+    text.includes(ASSIGN),
     "the instructions assign unsupported_post_type to a rejected postType and call_failed to a failed envelope or a missing content field",
   );
-  assert.equal(words.split(`${SUCCESS} ${ASSIGN}`).length - 1, 1, "the success and failure sentences are one run, in order");
-  // The only-instruction half: the whole text is the pinned one, so the contract is the only sentence on
-  // the codes, the code and message fields, an empty code after a failure or going on after one.
-  assertWords(data.system, READ_SYSTEM, "the read step's instructions");
-  assertWords(data.user, READ_USER, "the read step's input template");
-  assert.equal(words.split("call_failed").length - 1, 1, "call_failed occurs once in the read step's instructions, in the assignment");
+  assert.equal(text.split(`${SUCCESS} ${ASSIGN}`).length - 1, 1, "the success and failure sentences are one run, in order");
+  // The only-instruction half: the whole text is the pinned one, byte for byte once runs of white space are
+  // collapsed, so the contract is the only sentence on the codes, the code and message fields, an empty code
+  // after a failure or going on after one, and no character, mark or symbol can change what a sentence says.
+  assertPinned(data.system, READ_SYSTEM, READ_SYSTEM_SHA256, "the read step's instructions");
+  assertPinned(data.user, READ_USER, READ_USER_SHA256, "the read step's input template");
+  assert.equal(text.split("call_failed").length - 1, 1, "call_failed occurs once in the read step's instructions, in the assignment");
   assert.equal(
-    words.split("unsupported_post_type").length - 1,
+    text.split("unsupported_post_type").length - 1,
     2,
     "unsupported_post_type occurs twice in the read step's instructions, in Step 0 and in the assignment",
   );
   // No step but the read and write steps, and nothing outside the steps, names the read step's failure codes.
   const elsewhere = stringsOf({ ...oas, $referenced_components: { ...parts, [READ]: undefined, [WRITE]: undefined } }, "")
-    .filter(([, text]) => NAMES_A_FAILURE_CODE.test(text))
+    .filter(([, value]) => NAMES_A_FAILURE_CODE.test(value))
     .map(([at]) => at);
   assert.deepEqual(elsewhere, [], "no text outside the read and write steps names unsupported_post_type or call_failed");
   assert.ok(parts[WRITE], "the write step keeps its id");
