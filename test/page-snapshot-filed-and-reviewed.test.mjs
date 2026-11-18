@@ -43,6 +43,10 @@ const edgeInto = (node, input) =>
   oas.data_flow_connections.find(
     (e) => e.destination_node.$component_ref === node && e.destination_input === input,
   );
+const edgesInto = (node, input) =>
+  oas.data_flow_connections.filter(
+    (e) => e.destination_node.$component_ref === node && e.destination_input === input,
+  );
 const controlInto = (node) =>
   oas.control_flow_connections.filter((e) => e.to_node.$component_ref === node);
 const titles = (list) => (list ?? []).map((entry) => entry.title);
@@ -294,7 +298,8 @@ test("S4: the filing step files the page snapshot, and the manifest declares wha
     "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",
   );
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
-  assertEdgeFrom("file_page", "pageTitle", "compose_change");
+  assertEdgeFrom("file_page", "pageTitle", "read_page", "title");
+  assert.equal(edgesInto("file_page", "pageTitle").length, 1, "the filed title has one source, the read step");
   assertEdgeFrom("file_page", "pageForm", "compose_change");
   assertEdgeFrom("file_page", "cinatra_run_id", "start");
   assert.deepEqual(titles(node.outputs), ["artifactId", "representationRevisionId"]);
@@ -340,6 +345,8 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
   assert.equal(gate.component_type, "InputMessageNode");
   assert.equal(find(gate.inputs, "reviewTargets")?.type, "string");
   assert.ok(find(gate.inputs, "pageTitle"), "the review step declares pageTitle");
+  assertEdgeFrom(GATE, "pageTitle", "read_page", "title");
+  assert.equal(edgesInto(GATE, "pageTitle").length, 1, "the title the review shows has one source, the read step");
   assert.deepEqual(titles(gate.outputs), ["pageReviewNote"]);
   assert.equal(gate.metadata.cinatra.a2uiSurfaceId, "wordpress-agent:page-review");
 
