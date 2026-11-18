@@ -372,11 +372,11 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "compose_change_to_file_page_pageTitle",
+      "name": "read_page_to_file_page_pageTitle",
       "source_node": {
-        "$component_ref": "compose_change"
+        "$component_ref": "read_page"
       },
-      "source_output": "pageTitle",
+      "source_output": "title",
       "destination_node": {
         "$component_ref": "file_page"
       },
@@ -456,11 +456,11 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "compose_change_to_page_review_gate_pageTitle",
+      "name": "read_page_to_page_review_gate_pageTitle",
       "source_node": {
-        "$component_ref": "compose_change"
+        "$component_ref": "read_page"
       },
-      "source_output": "pageTitle",
+      "source_output": "title",
       "destination_node": {
         "$component_ref": "page_review_gate"
       },
