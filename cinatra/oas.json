@@ -1319,7 +1319,8 @@
         "cinatra_llm": {
           "preferredProvider": "openai",
           "preferredModel": "gpt-5.5"
-        }
+        },
+        "completed_error_codes": ["reread_failed"]
       },
       "inputs": [
         {
