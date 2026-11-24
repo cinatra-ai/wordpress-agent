@@ -2,8 +2,8 @@
 // with the published and the proposed words, the application reviews it, and
 // the write step follows the review.
 //
-// Nine arms: S1 the flow's one road; S2 the read step; S3 the compose step and
-// the form it answers; S4 the filing step and the package manifest; S5 the
+// Nine arms: S1 the flow's one road; S2 the read step; S3 the compose step, the
+// form it answers and the form the tool derives from it; S4 the filing step and the package manifest; S5 the
 // review step and the step that names the filed snapshot to it; S6 the write
 // step; S7 the declared module; S8 the end node; S9 the read of the reviewed
 // revision between the review and the write.
@@ -31,6 +31,7 @@ const ROAD = [
   "start",
   "read_page",
   "compose_change",
+  "form_page",
   "file_page",
   "gather_page_review",
   "page_review_gate",
@@ -206,13 +207,13 @@ test("S1: the flow runs one road from the read through the review to the write",
   assert.deepEqual(
     oas.nodes.map((n) => n.$component_ref),
     ROAD,
-    "the ten steps, in this order",
+    "the eleven steps, in this order",
   );
   for (const id of ROAD) assert.ok(parts[id], `the step ${id} is defined`);
   assert.deepEqual(
     oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.to_node.$component_ref]),
     ROAD.slice(0, -1).map((id, index) => [id, ROAD[index + 1]]),
-    "the nine control edges, in this order, with no branch",
+    "the ten control edges, in this order, with no branch",
   );
   assert.ok(ROAD.indexOf("edit") > ROAD.indexOf(GATE), "the write step comes after the review");
 });
@@ -246,7 +247,7 @@ test("S2: the read step reads the page and writes nothing", () => {
   assertEdgeFrom("read_page", "agent_run_id", "start", "cinatra_run_id");
 });
 
-test("S3: the compose step answers the page form the display reads, with the values the write step saves", () => {
+test("S3: the compose step answers the values to save, and the filed form shows each saved change as it is saved", async () => {
   const node = assertBridgeNode("compose_change");
   assert.deepEqual(node.data.toolbox_ids, [], "no tool joins the compose step");
   assert.deepEqual(titles(node.outputs), ["pageTitle", "pageForm", "error"]);
@@ -258,18 +259,14 @@ test("S3: the compose step answers the page form the display reads, with the val
   const form = find(node.outputs, "pageForm");
   assert.equal(form.type, "object");
   const formMembers = members(form);
-  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "excerpts", "page", "system", "writeFields"]);
+  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "page", "system", "writeFields"], "the compose step answers no excerpts");
   assert.deepEqual(Object.keys(members(formMembers.writeFields)).sort(), ["content", "excerpt", "title"]);
   for (const field of ["content", "excerpt", "title"])
     assert.deepEqual(members(formMembers.writeFields)[field], { type: ["string", "null"] }, `writeFields.${field} is a string or null`);
-  assert.deepEqual(
-    members(find(parts.file_page.inputs, "pageForm")),
-    formMembers,
-    "the filing step declares the same form, so the saved values are filed with the words the review shows",
-  );
   assert.deepEqual(Object.keys(members(formMembers.page)).sort(), ["address", "cmsAddress", "title"]);
+  const filed = members(find(parts.file_page.inputs, "pageForm"));
   assert.deepEqual(
-    Object.keys(members(items(formMembers.excerpts))).sort(),
+    Object.keys(members(items(filed.excerpts))).sort(),
     ["kind", "level", "position", "proposed", "published", "region"],
   );
 
@@ -281,13 +278,44 @@ test("S3: the compose step answers the page form the display reads, with the val
   const end = system.indexOf(EXAMPLE_END);
   assert.ok(begin >= 0 && end > begin, "the compose step's text carries one example form between its markers");
   assert.equal(system.indexOf(EXAMPLE_BEGIN, begin + 1), -1, "exactly one example form");
-  const example = parseCmsPage(system.slice(begin + EXAMPLE_BEGIN.length, end).trim());
-  assert.equal(example.ok, true, `the example form parses: ${JSON.stringify(example)}`);
-  assert.equal(example.page.system, "wordpress");
   const exampleForm = JSON.parse(system.slice(begin + EXAMPLE_BEGIN.length, end).trim());
   assert.equal("readAt" in exampleForm, false);
+  assert.equal("excerpts" in exampleForm, false, "the example form carries no excerpts");
   assert.deepEqual(Object.keys(exampleForm.writeFields).sort(), ["content", "excerpt", "title"], "the example form carries writeFields");
   assert.equal(exampleForm.writeFields.excerpt, null, "a field that does not change is null");
+
+  // The binding: the form the tool derives from the example's values and the
+  // post as read is the form the display reads, its excerpts show every saved
+  // change as source text, and the blocks they do not show are the post as read.
+  const read = {
+    title: "Opening hours",
+    content:
+      "<h2>When we are open</h2><p>We are open Monday to Friday.</p><p>Call ahead on public holidays.</p><ul><li>Monday to Friday: 9 to 18</li><li>Saturday: closed</li></ul>",
+    excerpt: "",
+  };
+  const { extensionTool } = await import("../cinatra/tools/reviewed-change.mjs");
+  const { pageForm } = await extensionTool({
+    input: {
+      op: "form",
+      pageForm: JSON.stringify(exampleForm),
+      title: JSON.stringify(read.title),
+      content: JSON.stringify(read.content),
+      excerpt: JSON.stringify(read.excerpt),
+    },
+    ports: {},
+  });
+  const example = parseCmsPage(JSON.stringify(pageForm));
+  assert.equal(example.ok, true, `the derived form parses: ${JSON.stringify(example)}`);
+  assert.equal(example.page.system, "wordpress");
+  assert.deepEqual(pageForm.writeFields, exampleForm.writeFields, "the filed values are the composed values");
+  assert.deepEqual(pageForm.excerpts.map((e) => e.region), ["title", "content", "content"]);
+  assert.equal(pageForm.excerpts[0].proposed, exampleForm.writeFields.title, "the shown title is the saved title");
+  let rebuilt = read.content;
+  for (const excerpt of pageForm.excerpts.filter((e) => e.region === "content")) {
+    assert.ok(excerpt.published.length > 0 && rebuilt.includes(excerpt.published));
+    rebuilt = rebuilt.replace(excerpt.published, excerpt.proposed);
+  }
+  assert.equal(rebuilt, exampleForm.writeFields.content, "the shown blocks are the whole difference between the post as read and the saved content");
 
   const fixture = parseCmsPage(JSON.stringify(WORDPRESS_FIXTURE_FORM));
   assert.equal(fixture.ok, true, "the display's WordPress fixture form parses under the same copy");
@@ -313,7 +341,8 @@ test("S4: the filing step files the page snapshot, and the manifest declares wha
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
   assertEdgeFrom("file_page", "pageTitle", "read_page", "title");
   assert.equal(edgesInto("file_page", "pageTitle").length, 1, "the filed title has one source, the read step");
-  assertEdgeFrom("file_page", "pageForm", "compose_change");
+  assertEdgeFrom("file_page", "pageForm", "form_page");
+  assertEdgeFrom("form_page", "pageForm", "compose_change");
   assertEdgeFrom("file_page", "cinatra_run_id", "start");
   assert.deepEqual(titles(node.outputs), ["artifactId", "representationRevisionId"]);
   assert.equal(node.metadata.cinatra.riskClass, "write");
@@ -403,11 +432,10 @@ test("S6: the write step follows the review and saves only the reviewed page sna
     ["read_reviewed_page"],
     "the only control edge into the write step comes from the read of the reviewed revision",
   );
-  assertEdgeFrom("edit", "artifactId", "file_page");
-  assertEdgeFrom("edit", "representationRevisionId", "file_page");
-  assertEdgeFrom("edit", "reviewedPage", "read_reviewed_page", "text");
-  assertEdgeFrom("edit", "reviewedRevisionId", "read_reviewed_page", "representationRevisionId");
-  assertEdgeFrom("edit", "reviewedTruncated", "read_reviewed_page", "truncated");
+  assertEdgeFrom("edit", "reviewedFields", "read_reviewed_page");
+  assertEdgeFrom("edit", "reviewedRevisionId", "read_reviewed_page");
+  for (const gone of ["artifactId", "representationRevisionId", "reviewedPage", "reviewedTruncated"])
+    assert.equal(find(node.inputs, gone), undefined, `the write step takes no ${gone}`);
   assert.equal(find(node.inputs, "proposedFields"), undefined, "the write step takes no value the compose step answered");
   assert.deepEqual(
     oas.data_flow_connections
@@ -421,31 +449,35 @@ test("S6: the write step follows the review and saves only the reviewed page sna
   assert.match(step1, /the read step hands you its values/, "Step 1 takes the post the read step read");
   assert.match(step1, /If `status` is empty/, "a failed read is told by an empty status");
   assert.doesNotMatch(step1, /If `content` is empty/, "an empty body is never a failed read");
-  assert.match(step1, /`reviewedRevisionId` is not empty and EXACTLY equals `representationRevisionId`/, "the read revision is the reviewed one");
-  assert.match(step1, /`reviewedTruncated` is false/, "a cut-short read is no reviewed change");
+  assert.match(step1, /`reviewedRevisionId` is not empty/, "the read names the revision it read");
   assert.match(step1, /make NO WordPress call at all and return the STOPPED RESULT with `code: "reviewed_change_unavailable"`/, "no reviewed change, no write");
   const step2 = node.data.system.split("**STEP 2")[1]?.split("**STEP 3")[0] ?? "";
-  assert.match(step2, /exactly the `writeFields` members that are non-empty strings, each byte for byte \(Rule 4\), and no other field/, "the write takes the reviewed writeFields");
+  assert.match(step2, /exactly the `reviewedFields` members that are non-empty strings, each byte for byte \(Rule 4\), and no other field/, "the write takes the reviewed writeFields");
   assert.match(node.data.system, /never take a value from `instructions` or from anything else/, "the request is not a source of a written value");
   assert.deepEqual(titles(node.outputs), RUN_OUTPUTS, "the write step keeps its six outputs");
 });
 
-test("S9: the reviewed revision is read back after the review, by its revision id", () => {
+test("S9: the approved revision is read back after the review, by the revision id the review's answer names", () => {
   const node = parts.read_reviewed_page;
   assert.ok(node, "the flow carries the read of the reviewed revision");
   assert.equal(node.component_type, "ApiNode");
   assert.ok(node.url.endsWith("/api/agents/passthrough"));
-  assert.equal(node.data.tool, "artifact_content_read");
-  assert.deepEqual(node.data.input, {
-    artifactId: "{{ artifactId }}",
-    representationRevisionId: "{{ representationRevisionId }}",
-  }, "the read names the revision, never the latest one");
+  assert.equal(node.data.tool, "extension_tool");
+  assert.equal(node.data.input.name, "reviewed_change");
+  assert.equal(node.data.input.input.op, "read");
+  assert.equal(node.data.input.input.artifactId, "{{ artifactId }}");
+  assert.equal(
+    node.data.input.input.reviewAnswer,
+    "{# pyagentspec-input-hint (do not remove): {{ reviewAnswer }} #}{{ reviewAnswer | tojson }}",
+    "the answer reaches the tool as JSON text, which the tool parses",
+  );
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
   assertEdgeFrom("read_reviewed_page", "artifactId", "file_page");
-  assertEdgeFrom("read_reviewed_page", "representationRevisionId", "file_page");
+  assertEdgeFrom("read_reviewed_page", "reviewAnswer", GATE, "pageReviewNote");
   assertEdgeFrom("read_reviewed_page", "cinatra_run_id", "start");
-  assert.deepEqual(titles(node.outputs), ["text", "representationRevisionId", "mime", "truncated"]);
-  assert.equal(find(node.outputs, "truncated").default, true, "a missing truncation flag counts as cut short");
+  for (const field of ["title", "content", "excerpt"]) assertEdgeFrom("read_reviewed_page", field, "read_page");
+  assert.equal(edgeInto("read_reviewed_page", "representationRevisionId"), undefined, "the filed revision is never the one read");
+  assert.deepEqual(titles(node.outputs), ["reviewedFields", "reviewedRevisionId", "ok"]);
   assert.deepEqual(
     controlInto("read_reviewed_page").map((e) => e.from_node.$component_ref),
     [GATE],
@@ -454,14 +486,17 @@ test("S9: the reviewed revision is read back after the review, by its revision i
   assert.equal(node.metadata.cinatra.riskClass, "read_only");
   assert.equal(node.metadata.cinatra.requiresApproval, false);
   assert.equal("publishes" in node.metadata.cinatra, false);
-  // The revision the review pins is the revision the read names.
+  // The revision the review is opened on is the filed one; the revision read is the approved one.
   const template = parts.gather_page_review.data.input.input.reviewTargets;
   assert.ok(template.includes("{{ pageRevisionId }}"));
   assertEdgeFrom("gather_page_review", "pageRevisionId", "file_page", "representationRevisionId");
 });
 
 test("S7: the declared module hands the review set to the application and touches nothing else", async () => {
-  assert.deepEqual(pkg.cinatra.tools, [{ name: "review_targets", module: "./cinatra/tools/review-targets.mjs" }]);
+  assert.deepEqual(pkg.cinatra.tools, [
+    { name: "review_targets", module: "./cinatra/tools/review-targets.mjs" },
+    { name: "reviewed_change", module: "./cinatra/tools/reviewed-change.mjs" },
+  ]);
   const { extensionTool } = await import("../cinatra/tools/review-targets.mjs");
   assert.equal(typeof extensionTool, "function");
 

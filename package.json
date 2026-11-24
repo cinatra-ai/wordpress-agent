@@ -60,6 +60,10 @@
       {
         "name": "review_targets",
         "module": "./cinatra/tools/review-targets.mjs"
+      },
+      {
+        "name": "reviewed_change",
+        "module": "./cinatra/tools/reviewed-change.mjs"
       }
     ],
     "lifecycle": {

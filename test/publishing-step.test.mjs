@@ -7,7 +7,7 @@
 // rows the publish card shows. The application opens that card only after an
 // approved artifact review earlier in the same run; `page_review_gate` is that
 // review. Between the review and the write, `read_reviewed_page` reads back the
-// reviewed revision, and the write step saves only the values of that text.
+// revision the review approved, and the write step saves only its values.
 //
 // The card is shown only on a run that has a change to save: a request on a
 // page, and a request that changes nothing, end the run at the compose step,
@@ -138,8 +138,8 @@ test("a request on a page and a request that changes nothing end the run at the 
   assert.ok(road.indexOf("file_page") < road.indexOf(REVIEW_STEP) && road.indexOf(REVIEW_STEP) < road.indexOf(WRITE_STEP));
   assert.deepEqual(
     oas.control_flow_connections.filter((edge) => edge.from_node.$component_ref === COMPOSE_STEP).map((edge) => edge.to_node.$component_ref),
-    ["file_page"],
-    "the compose step has one way on, to the filing",
+    ["form_page"],
+    "the compose step has one way on, to the derivation of the filed form",
   );
 });
 
@@ -154,7 +154,12 @@ test("a stop of the write step makes no write, so it makes no demotion", () => {
   assert.ok(system.includes("never a write of its own"), "the demotion rides only on the save");
 });
 
-test("before the save, the write step re-reads the post and stops when it changed during the review", () => {
+// What this checks: the write step re-reads the post and compares its change
+// time and status with the read the review was based on, before the update.
+// What it does not give: an atomic save. `ewpa/update-post` takes no expected
+// change time or revision, so the update is unconditional and an edit saved on
+// the site between this re-read and the update is overwritten.
+test("before the save, the write step re-reads the post and stops when it changed during the review; the update itself is unconditional", () => {
   const into = (input) =>
     oas.data_flow_connections
       .filter((edge) => edge.destination_node.$component_ref === WRITE_STEP && edge.destination_input === input)
@@ -171,6 +176,7 @@ test("before the save, the write step re-reads the post and stops when it change
   );
   const step2 = section(parts[WRITE_STEP].data.system, "**STEP 2", "**STEP 3");
   assert.equal(step2.includes("wordpress_site_tool_call"), false, "the save step itself reads nothing");
+  assert.ok(step2.includes("`args: { post_id, title?, content?, excerpt?, status? }`"), "the update carries no expected change time or revision");
 });
 
 test("every other step that can reach a connector declares publishes false or is read only", () => {
@@ -194,7 +200,8 @@ test("an approved artifact review comes before the write, with only the read of 
   assert.deepEqual(into(WRITE_STEP), [REVIEWED_READ]);
   assert.deepEqual(into(REVIEWED_READ), [REVIEW_STEP]);
   const between = parts[REVIEWED_READ];
-  assert.equal(between.data.tool, "artifact_content_read", "the step between reads an artifact and reaches no connector");
+  assert.equal(between.data.tool, "extension_tool", "the step between calls the pack's tool, which reads an artifact and reaches no connector");
+  assert.equal(between.data.input.name, "reviewed_change");
   assert.equal(cinatraOf(between).riskClass, "read_only");
   const review = parts[REVIEW_STEP];
   assert.equal(review.component_type, "InputMessageNode");

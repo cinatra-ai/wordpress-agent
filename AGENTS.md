@@ -68,16 +68,60 @@ All fields are strings. `postId` is a string representation of a numeric ID — 
 
 Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) and a request that changes nothing (code `nothing_to_change`) end the run failed at the compose step, before anything is filed, reviewed or shown on the publish card.
 
-**Stopped variant** (the run completes, nothing was written, no `proposalId`): `post_changed` when the post's change time or status differs, just before the write, from the read the review was based on (another editor changed, published or unpublished it during the review), and `reviewed_change_unavailable` when the reviewed page snapshot revision cannot be read back whole. The `message` says that nothing was written.
+**Stopped variant** (the run completes, nothing was written, no `proposalId`): `post_changed` when the post's change time or status differs, just before the write, from the read the review was based on (another editor changed, published or unpublished it during the review), and `reviewed_change_unavailable` when the write step is handed no usable reviewed values (a backstop; the step in front of it already fails the run in that case, see below). The `message` says that nothing was written.
 
 The caller reads this from `task.history` (not `task.artifacts`) — WayFlow's `task.artifacts` is not implemented.
+
+## The write saves only the reviewed change (cinatra-ai/cinatra#3745)
+
+The flow is `start` → `read_page` → `compose_change` → `form_page` →
+`file_page` → `gather_page_review` → `page_review_gate` →
+`read_reviewed_page` → `edit` → `emit_output` → `end`.
+
+`compose_change` answers the values to save in `pageForm.writeFields`: the
+complete new `title`, `content` and `excerpt`, each a non-empty string or
+null. It answers no excerpts. `form_page` calls the pack's `reviewed_change`
+tool (`cinatra/tools/reviewed-change.mjs`, op `form`), which derives the
+excerpts the review shows from those values and the post as read, by code: each
+value is split into its top-level blocks (an element with its content, a
+comment, or a run of text), the blocks of the post as read and of the value are
+compared, and every block that differs is shown with its source text on both
+sides, markup and link targets included. The blocks it does not show are byte
+for byte the post as read. So a change of a link target alone is shown, and no
+value can be saved that the review does not show. The tool refuses
+(`page_form_unavailable`, the run fails, nothing is filed) when the values
+change nothing, differ from the post only in white space (the display shows no
+difference there), touch more than 200 blocks, or are not texts or null.
+
+After the review, `read_reviewed_page` calls the same tool (op `read`). It
+takes the revision the review's answer approves (`review.targets` of the
+answer that resumes the run; the answer must be an approval: `approved: true`
+and `review.decision` "approved", envelope version 1, exactly one target, on
+the artifact this run filed), never the revision this run filed: after a
+Regenerate the approved revision is a successor of the filed one. It reads that
+revision through the host's artifact read port by its revision id, derives the
+excerpts again from its `writeFields` and the post as read, and answers
+`reviewedFields` (the JSON text of the values) and `reviewedRevisionId` only
+when they equal the excerpts the revision shows. `edit` saves exactly
+`reviewedFields`. The tool refuses, so the run fails with
+`reviewed_change_unavailable` and a message and no WordPress call is made, when
+the answer names no single approved revision of the filed artifact, when the
+read fails, is cut short or answers another revision or artifact, when the text
+is not a WordPress page snapshot or carries no values to save, and when its
+values differ from the excerpts it shows. The re-read of the post before the
+write (`post_changed`), `page_editing_unsupported`, `nothing_to_change` and
+the rows of the publish card stay as they are.
+
+What the review cannot show: a change of white space alone (refused, see
+above), and the post as read is the read step's answer, so the unshown blocks
+equal that answer, not a second read of the site.
 
 ## Draft-revision workflow — CRITICAL asymmetry with Drupal
 
 WordPress lacks a true draft-revision API. The agent prompt enforces a **demote-then-edit** pattern:
 
 1. `ewpa/get-post` (or `ewpa/get-page`) → read current content (including `content` field — required for before/after diff) and its change time; the change is composed, filed as a page snapshot and reviewed
-2. `ewpa/get-post` again just before the write — the write is made only when the change time and the status still equal the first read
+2. `ewpa/get-post` again just before the write — the write is made only when the change time and the status still equal the first read. This is a check, not a conditional write: `ewpa/update-post` takes no expected change time or revision (see the table below), so an edit saved on the site between this re-read and the update is overwritten. Closing that window needs the site ability to take an expected change time and refuse the update when the post's stored change time differs.
 3. `ewpa/update-post` with the reviewed values AND `status: "draft"` in the SAME call when the status read is `publish` — demotes the live post (the live revision is preserved in WordPress's revision history, but the front-of-site copy becomes a draft)
 4. `ewpa/get-post` again (independent re-read — the update ability's own response is not trusted for after-values, see below)
 5. Return diff JSON
@@ -92,7 +136,7 @@ This agent has two WordPress MCP call primitives: the read tool `wordpress_site_
 |---|---|
 | `ewpa/get-post` | Read a post by id (`args: { post_id }`) — required for before/after diffs |
 | `ewpa/get-page` | Read a page by id (`args: { post_id }`) — used instead of `ewpa/get-post` only when `postType === "page"` |
-| `ewpa/update-post` | Via `wordpress_site_tool_write`. Update a post's top-level fields (`args: { post_id, title?, content?, excerpt?, status? }`) — supports `postType === "post"` (default) ONLY; there is no proven page-update or meta-update ability behind this cutover (see below) |
+| `ewpa/update-post` | Via `wordpress_site_tool_write`. Update a post's top-level fields (`args: { post_id, title?, content?, excerpt?, status? }`) — supports `postType === "post"` (default) ONLY; there is no proven page-update or meta-update ability behind this cutover (see below). It has no argument for an expected change time or revision, so the update is unconditional |
 
 `ewpa/create-post` is forbidden by the agent prompt — never call it. Creating new posts is outside the scope of this agent.
 
