@@ -8,13 +8,13 @@ Edit a post on a connected WordPress site from a plain-language instruction — 
 
 **Configuration.** Supply `instanceId` (your registered WordPress instance), `postId`, `postType` (`post`, the default; `page` is read-only), `postStatus` (`publish` or `draft`), and a plain-language `instructions` string.
 
-**Usage.** Trigger via the Cinatra content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. For a published post the agent demotes it to draft before applying changes; for a draft it writes directly.
+**Usage.** Trigger via the Cinatra content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. It saves only the reviewed values, if the post did not change during review; a published post becomes a draft.
 
 **Development.** Start the local stack with `docker compose --profile wordpress up -d`. Runs on port 3021; override with `WP_CONTENT_EDITOR_A2A_URL` in `.env.local`.
 
-**API contract.** Inputs: `instanceId`, `postId`, `postType`, `postStatus`, `instructions` (all strings). Success: `postId`, `instanceId`, `proposalId` (required), optional `changeSetId`, and `changes: [{field, before, after}]`; a demote also adds a status entry. Failure: empty `changes` plus `error.code` — `unsupported_post_type` / `page_editing_unsupported` / `call_failed` (no `proposalId`) or `reread_failed` (write saved, reread failed; `proposalId` included).
+**API contract.** Inputs: `instanceId`, `postId`, `postType`, `postStatus`, `instructions` (all strings). Success: `postId`, `instanceId`, `proposalId` (required), optional `changeSetId`, and `changes: [{field, before, after}]`; a demote also adds a status entry. Failure: empty `changes` plus `error.code` — `unsupported_post_type` / `page_editing_unsupported` / `nothing_to_change` / `call_failed` (failed), `post_changed` / `reviewed_change_unavailable` (nothing written) or `reread_failed` (saved, reread failed; has `proposalId`).
 
-**Troubleshooting.** A `500` usually means `instanceId` doesn't match a registered connection — check workspace settings. Empty `changes` alone isn't proof of a no-op — check `error` first (absent = no matching field; present = failed, or for `reread_failed`, saved but unconfirmed).
+**Troubleshooting.** A `500` usually means `instanceId` matches no registered connection. Empty `changes` alone isn't proof of a no-op — check `error` first (`reread_failed`: saved, unconfirmed).
 
 ## Works with
 - WordPress

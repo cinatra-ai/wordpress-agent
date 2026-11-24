@@ -83,7 +83,7 @@ const STEP0 =
   "answer the result below with `error.code` `\"unsupported_post_type\"`.";
 const SUCCESS = "On a successful read, `error` carries the empty string in `code` and in `message`.";
 const ASSIGN =
-  "On a failure, `title`, `content`, `excerpt`, `status` and `address` are the empty string and `error` is `{ code, message }`: " +
+  "On a failure, `title`, `content`, `excerpt`, `status`, `address` and `modified` are the empty string and `error` is `{ code, message }`: " +
   "`code` is `\"unsupported_post_type\"` for a postType rejected in Step 0 and " +
   "`\"call_failed\"` for a failed envelope or a missing content field in Step 1, and `message` is a short plain-language explanation.";
 
@@ -115,18 +115,19 @@ const READ_SYSTEM = [
   "   - excerpt: `data.post_excerpt`, then `data.excerpt`",
   "   - status: `data.post_status`, then `data.status`",
   "   - address: `data.permalink`, then `data.link` \u2014 the post's own public address; the empty string when neither is present.",
+  "   - modified: `data.post_modified_gmt`, then `data.modified_gmt`, then `data.post_modified`, then `data.modified` \u2014 the time the site last changed the post, as the response gives it; the empty string when none is present.",
   "",
   "## Steps",
   "",
   "**STEP 0 \u2014 Validate postType BEFORE any WordPress call:** If `postType` is anything other than unset, `\"post\"`, or `\"page\"`, make NO WordPress call at all \u2014 answer the result below with `error.code` `\"unsupported_post_type\"`. Only unset/`\"post\"` (full edit support) and `\"page\"` (read-only, Rule 6) proceed.",
   "",
-  "**STEP 1 \u2014 Load post:** Call `wordpress_site_tool_call` with `toolName: \"ewpa/get-post\"` (or `\"ewpa/get-page\"` when `postType === \"page\"`) and `args: { post_id: <postId as a number> }`. Check `success === true` (Rule 2). Read title/content/excerpt/status/address per Rule 3.",
+  "**STEP 1 \u2014 Load post:** Call `wordpress_site_tool_call` with `toolName: \"ewpa/get-post\"` (or `\"ewpa/get-page\"` when `postType === \"page\"`) and `args: { post_id: <postId as a number> }`. Check `success === true` (Rule 2). Read title/content/excerpt/status/address/modified per Rule 3.",
   "",
   "## The result",
   "",
-  "Fill the declared output fields: `postId`, `instanceId` and `postType` as the inputs gave them; `title`, `content`, `excerpt` and `status` exactly as read (Rule 3; the empty string for an absent excerpt); `address` per Rule 3; and `error`. On a successful read, `error` carries the empty string in `code` and in `message`. On a failure, `title`, `content`, `excerpt`, `status` and `address` are the empty string and `error` is `{ code, message }`: `code` is `\"unsupported_post_type\"` for a postType rejected in Step 0 and `\"call_failed\"` for a failed envelope or a missing content field in Step 1, and `message` is a short plain-language explanation. Never invent a value for a field that is absent from every name in its list.",
+  "Fill the declared output fields: `postId`, `instanceId` and `postType` as the inputs gave them; `title`, `content`, `excerpt` and `status` exactly as read (Rule 3; the empty string for an absent excerpt); `address` and `modified` per Rule 3; and `error`. On a successful read, `error` carries the empty string in `code` and in `message`. On a failure, `title`, `content`, `excerpt`, `status`, `address` and `modified` are the empty string and `error` is `{ code, message }`: `code` is `\"unsupported_post_type\"` for a postType rejected in Step 0 and `\"call_failed\"` for a failed envelope or a missing content field in Step 1, and `message` is a short plain-language explanation. Never invent a value for a field that is absent from every name in its list.",
 ].join("\n");
-const READ_SYSTEM_SHA256 = "a7288c77d29d5b08828a43fd4e54b75c69f04200c1c5cc23f3687e2f6de5086f";
+const READ_SYSTEM_SHA256 = "77302b709f6fef8df73e2193c29103a2a9eddac81bb8e089e4078c8e2f9b343d";
 const READ_USER = [
   "Read the WordPress post now and fill the declared output fields.",
   "Inputs:",
@@ -164,6 +165,7 @@ const READ_STEP_REST = {
     { title: "excerpt", type: "string" },
     { title: "status", type: "string" },
     { title: "address", type: "string" },
+    { title: "modified", type: "string" },
     { title: "error", type: "object", json_schema: { properties: { code: { type: "string" }, message: { type: "string" } } } },
   ],
   metadata: { cinatra: { riskClass: "read_only", requiresApproval: false, packageName: "@cinatra-ai/wordpress-agent", description: "The agent reads the page." } },
@@ -308,7 +310,7 @@ test("R3: every step after the read step is reached only through the read step",
   );
   // No later step is named here: the walk reads edges only, so a renamed or a
   // new step passes while a bypass of the read does not (the step ids and the
-  // eight edges are pinned by S1 of test/page-snapshot-filed-and-reviewed.test.mjs).
+  // nine edges are pinned by S1 of test/page-snapshot-filed-and-reviewed.test.mjs).
   // The allow-list half: nothing but the start itself is reached without the
   // read step, so a new step or edge cannot bypass the read unnamed.
   assert.deepEqual(

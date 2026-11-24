@@ -6,7 +6,14 @@
 // person's released publish decision. So the `edit` step declares it, with the
 // rows the publish card shows. The application opens that card only after an
 // approved artifact review earlier in the same run; `page_review_gate` is that
-// review, directly in front of the write.
+// review. Between the review and the write, `read_reviewed_page` reads back the
+// reviewed revision, and the write step saves only the values of that text.
+//
+// The card is shown only on a run that has a change to save: a request on a
+// page, and a request that changes nothing, end the run at the compose step,
+// before anything is filed, reviewed or shown on a card. On the card, the
+// status row's label states the demotion as a rule of the save, so it is true
+// also when a check of the write step stops the run before the save.
 //
 // What this file executes: it reads `cinatra/oas.json` and checks its shape
 // against the rules of two readers, the application's compiler
@@ -29,9 +36,11 @@ const parts = oas.$referenced_components;
 
 const WRITE_STEP = "edit";
 const REVIEW_STEP = "page_review_gate";
+const REVIEWED_READ = "read_reviewed_page";
+const COMPOSE_STEP = "compose_change";
 const ACTION_KINDS = ["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"];
 const NO_CONNECTOR_KINDS = ["StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode"];
-const STATUS_LABEL = "Status (if publish, the edit takes it offline as draft)";
+const STATUS_LABEL = "Status (if publish, saving makes it an offline draft)";
 const ROWS = [
   { label: "WordPress site", input: "instanceId" },
   { label: "Current title", input: "title" },
@@ -42,6 +51,8 @@ const ROWS = [
 const cinatraOf = (component) => component?.metadata?.cinatra ?? {};
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const topLevelIds = () => oas.nodes.map((entry) => entry.$component_ref);
+const collapse = (text) => text.replace(/\s+/g, " ");
+const section = (text, from, to) => text.split(from)[1]?.split(to)[0] ?? "";
 
 /** Every object in the flow that carries `key` under `metadata.cinatra`. */
 function carriersOf(key) {
@@ -73,7 +84,7 @@ test("the write step is the step that calls the outward write tool", () => {
   assert.deepEqual(callers, [WRITE_STEP]);
 });
 
-test("the publish card shows the site, the current title, the status with its effect and the requested change", () => {
+test("the publish card shows the site, the current title, the status with the rule of the save and the requested change", () => {
   assert.deepEqual(cinatraOf(parts[WRITE_STEP]).publishRows, ROWS);
   const titles = parts[WRITE_STEP].inputs.map((input) => input.title);
   for (const row of ROWS) {
@@ -84,10 +95,10 @@ test("the publish card shows the site, the current title, the status with its ef
 });
 
 // The card has no literal values: a row shows one input of the step. So the
-// effect of the edit on the live site is the status row: its value is the
+// effect of the save on the live site is the status row: its value is the
 // status the read step answered, and its label states the rule the write step
-// applies to that same value.
-test("the status row shows the value the write step decides the demotion on, under a label that states it", () => {
+// applies to that same value when it saves.
+test("the status row shows the value the write step decides the demotion on, under a label that ties it to the save", () => {
   const into = oas.data_flow_connections.filter(
     (edge) => edge.destination_node.$component_ref === WRITE_STEP && edge.destination_input === "status",
   );
@@ -98,15 +109,68 @@ test("the status row shows the value the write step decides the demotion on, und
   );
   const { system, user } = parts[WRITE_STEP].data;
   assert.ok(user.includes("- status: {{ status }}"), "the write step gets that status");
+  const step2 = section(system, "**STEP 2", "**STEP 3");
   assert.ok(
-    system.includes("When the status you read in Step 1 is `publish`, also include `status: \"draft\"` in the SAME call"),
-    "the write step demotes a post whose status is publish",
+    step2.includes("When the status you read in Step 1 is `publish`, also include `status: \"draft\"` in the SAME call"),
+    "the save demotes a post whose status is publish",
   );
   assert.ok(
-    system.includes("When the status you read in Step 1 is anything other than `publish`, omit the `status` field."),
-    "the write step keeps every other status",
+    step2.includes("When the status you read in Step 1 is anything other than `publish`, omit the `status` field."),
+    "the save keeps every other status",
   );
-  assert.ok(STATUS_LABEL.includes("publish") && STATUS_LABEL.includes("offline") && STATUS_LABEL.includes("draft"));
+  assert.ok(STATUS_LABEL.startsWith("Status (if publish, saving "), "the label states the demotion as a rule of the save");
+  assert.ok(STATUS_LABEL.includes("offline") && STATUS_LABEL.includes("draft"));
+});
+
+// The branches of a run that save nothing. Each one either ends the run before
+// the card, or is a stop of the write step that makes no write and so no
+// demotion.
+test("a request on a page and a request that changes nothing end the run at the compose step, before the card", () => {
+  const compose = parts[COMPOSE_STEP];
+  const system = collapse(compose.data.system);
+  assert.ok(system.includes("When `postType` is `page`, answer `error.code` `\"page_editing_unsupported\"`"));
+  assert.ok(system.includes("answer `error.code` `\"nothing_to_change\"`"));
+  assert.ok(system.includes("before anything is filed, reviewed or written"));
+  assert.ok(compose.outputs.some((output) => output.title === "error"), "the compose step answers its error");
+  assert.equal(has(compose.data, "completed_error_codes"), false, "an error of the compose step ends the run failed");
+  const road = topLevelIds();
+  assert.ok(road.indexOf(COMPOSE_STEP) < road.indexOf("file_page"), "the compose step comes before the filing");
+  assert.ok(road.indexOf("file_page") < road.indexOf(REVIEW_STEP) && road.indexOf(REVIEW_STEP) < road.indexOf(WRITE_STEP));
+  assert.deepEqual(
+    oas.control_flow_connections.filter((edge) => edge.from_node.$component_ref === COMPOSE_STEP).map((edge) => edge.to_node.$component_ref),
+    ["file_page"],
+    "the compose step has one way on, to the filing",
+  );
+});
+
+test("a stop of the write step makes no write, so it makes no demotion", () => {
+  const system = collapse(parts[WRITE_STEP].data.system);
+  const step1 = section(system, "**STEP 1", "**STEP 2");
+  assert.ok(step1.includes("a check that fails ends this step with the result it names, and NO write is made"));
+  assert.ok(step1.includes("return the STOPPED RESULT with `code: \"reviewed_change_unavailable\"`"));
+  assert.ok(step1.includes("return the STOPPED RESULT with `code: \"post_changed\"`"));
+  assert.ok(step1.includes("return the `page_editing_unsupported` ERROR RESULT"));
+  assert.ok(system.includes("NO write was made and a published post STAYS published"));
+  assert.ok(system.includes("never a write of its own"), "the demotion rides only on the save");
+});
+
+test("before the save, the write step re-reads the post and stops when it changed during the review", () => {
+  const into = (input) =>
+    oas.data_flow_connections
+      .filter((edge) => edge.destination_node.$component_ref === WRITE_STEP && edge.destination_input === input)
+      .map((edge) => [edge.source_node.$component_ref, edge.source_output]);
+  assert.deepEqual(into("modified"), [["read_page", "modified"]], "the change time the review was based on comes from the read step");
+  assert.deepEqual(into("status"), [["read_page", "status"]]);
+  const step1 = collapse(section(parts[WRITE_STEP].data.system, "**STEP 1", "**STEP 2"));
+  assert.ok(step1.includes("call `wordpress_site_tool_call` with `toolName: \"ewpa/get-post\"`"), "Step 1 re-reads the post");
+  assert.ok(
+    step1.includes(
+      "The post is unchanged only when the `modified` handed to you is not empty, the `modified` of this response EXACTLY equals it, and the `status` of this response EXACTLY equals the `status` handed to you.",
+    ),
+    "Step 1 compares the change time and the status",
+  );
+  const step2 = section(parts[WRITE_STEP].data.system, "**STEP 2", "**STEP 3");
+  assert.equal(step2.includes("wordpress_site_tool_call"), false, "the save step itself reads nothing");
 });
 
 test("every other step that can reach a connector declares publishes false or is read only", () => {
@@ -123,12 +187,19 @@ test("every other step that can reach a connector declares publishes false or is
   assert.deepEqual(carriersOf("publishes").filter((id) => cinatraOf(parts[id]).publishes === true), [WRITE_STEP]);
 });
 
-test("an approved artifact review comes directly before the write, drawn by the application", () => {
-  const into = oas.control_flow_connections.filter((edge) => edge.to_node.$component_ref === WRITE_STEP);
-  assert.deepEqual(into.map((edge) => edge.from_node.$component_ref), [REVIEW_STEP]);
+test("an approved artifact review comes before the write, with only the read of the reviewed revision between", () => {
+  const road = topLevelIds();
+  assert.deepEqual(road.slice(road.indexOf(REVIEW_STEP), road.indexOf(WRITE_STEP) + 1), [REVIEW_STEP, REVIEWED_READ, WRITE_STEP]);
+  const into = (id) => oas.control_flow_connections.filter((edge) => edge.to_node.$component_ref === id).map((edge) => edge.from_node.$component_ref);
+  assert.deepEqual(into(WRITE_STEP), [REVIEWED_READ]);
+  assert.deepEqual(into(REVIEWED_READ), [REVIEW_STEP]);
+  const between = parts[REVIEWED_READ];
+  assert.equal(between.data.tool, "artifact_content_read", "the step between reads an artifact and reaches no connector");
+  assert.equal(cinatraOf(between).riskClass, "read_only");
   const review = parts[REVIEW_STEP];
   assert.equal(review.component_type, "InputMessageNode");
   const cinatra = cinatraOf(review);
+  assert.equal(cinatra.requiresApproval, true, "the review asks a person for the approval");
   assert.equal(cinatra.artifactReview?.targetsInput, "reviewTargets");
   assert.ok(review.inputs.some((input) => input.title === "reviewTargets"));
   for (const key of ["renderer", "inputRenderers", "gateRenderer"]) assert.ok(!has(cinatra, key), `the review declares no ${key}`);

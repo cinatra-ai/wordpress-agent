@@ -3,10 +3,14 @@
 // A model step (an ApiNode on the application's model bridge) answers a
 // failure with a non-empty `error.code`. The application ends the step, and so
 // the run, as failed on such an answer, unless the step's data lists the code
-// in `completed_error_codes`. The write step lists `reread_failed` there: the
-// update WAS saved, only its re-read failed, so the run completes and hands
-// the `proposalId` on. Every other code of the write step, and every code of
-// the read step, ends the run failed: a failed read files no page snapshot.
+// in `completed_error_codes`. The write step lists three codes there:
+// `reread_failed` (the update WAS saved, only its re-read failed, so the run
+// completes and hands the `proposalId` on), and `post_changed` and
+// `reviewed_change_unavailable` (the step wrote nothing because the post
+// changed during the review or the reviewed change could not be read back;
+// the run completes with the step's message). Every other code of the write
+// step, and every code of the read and compose steps, ends the run failed: a
+// failed read or compose files no page snapshot.
 //
 // Three arms: C1 the write step's list; C2 the read and compose steps list
 // nothing; C3 each listed code is one the step's own instructions name.
@@ -29,13 +33,13 @@ const bridgeSteps = Object.values(parts).filter(
     node.url.endsWith(LLM_BRIDGE_PATH),
 );
 
-test("C1: the write step ends completed on reread_failed and on no other code", () => {
+test("C1: the write step ends completed on reread_failed, post_changed and reviewed_change_unavailable only", () => {
   const node = parts.edit;
   assert.ok(node, "the write step keeps its id");
   assert.deepEqual(
     node.data.completed_error_codes,
-    ["reread_failed"],
-    "the write step lists exactly reread_failed: the update was saved, only its re-read failed",
+    ["reread_failed", "post_changed", "reviewed_change_unavailable"],
+    "the write step lists exactly the saved-but-unconfirmed code and the two codes of a stop before the write",
   );
   for (const code of ["call_failed", "page_editing_unsupported", "unsupported_post_type"]) {
     assert.equal(
