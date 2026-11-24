@@ -8,10 +8,14 @@
 // approved artifact review earlier in the same run; `page_review_gate` is that
 // review, directly in front of the write.
 //
-// These cases restate the readers' rules over this flow: the application's
-// compiler (cinatra-ai/cinatra, packages/agents/src/oas-compiler.ts,
+// What this file executes: it reads `cinatra/oas.json` and checks its shape
+// against the rules of two readers, the application's compiler
+// (cinatra-ai/cinatra, packages/agents/src/oas-compiler.ts,
 // `collectPublishingSteps` and `collectPublishRows`) and the pack check
-// (cinatra-ai/ci, scripts/agent-publish-gate.mjs). They run neither reader.
+// (cinatra-ai/ci, scripts/agent-publish-gate.mjs).
+// What it does not execute: neither reader. This repository has no copy of
+// them, so a change to their rules is not seen here; run both against this
+// flow before a merge.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -27,10 +31,11 @@ const WRITE_STEP = "edit";
 const REVIEW_STEP = "page_review_gate";
 const ACTION_KINDS = ["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"];
 const NO_CONNECTOR_KINDS = ["StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode"];
+const STATUS_LABEL = "Status (if publish, the edit takes it offline as draft)";
 const ROWS = [
   { label: "WordPress site", input: "instanceId" },
-  { label: "Post", input: "postId" },
   { label: "Current title", input: "title" },
+  { label: STATUS_LABEL, input: "status" },
   { label: "Requested change", input: "instructions" },
 ];
 
@@ -68,7 +73,7 @@ test("the write step is the step that calls the outward write tool", () => {
   assert.deepEqual(callers, [WRITE_STEP]);
 });
 
-test("the publish card shows the site, the post, its current title and the requested change", () => {
+test("the publish card shows the site, the current title, the status with its effect and the requested change", () => {
   assert.deepEqual(cinatraOf(parts[WRITE_STEP]).publishRows, ROWS);
   const titles = parts[WRITE_STEP].inputs.map((input) => input.title);
   for (const row of ROWS) {
@@ -76,6 +81,32 @@ test("the publish card shows the site, the post, its current title and the reque
     assert.ok(row.label.length >= 1 && row.label.length <= 60 && row.label === row.label.trim());
   }
   assert.deepEqual(carriersOf("publishRows"), [WRITE_STEP], "no other component carries publishRows");
+});
+
+// The card has no literal values: a row shows one input of the step. So the
+// effect of the edit on the live site is the status row: its value is the
+// status the read step answered, and its label states the rule the write step
+// applies to that same value.
+test("the status row shows the value the write step decides the demotion on, under a label that states it", () => {
+  const into = oas.data_flow_connections.filter(
+    (edge) => edge.destination_node.$component_ref === WRITE_STEP && edge.destination_input === "status",
+  );
+  assert.deepEqual(
+    into.map((edge) => [edge.source_node.$component_ref, edge.source_output]),
+    [["read_page", "status"]],
+    "the status input comes only from the read step",
+  );
+  const { system, user } = parts[WRITE_STEP].data;
+  assert.ok(user.includes("- status: {{ status }}"), "the write step gets that status");
+  assert.ok(
+    system.includes("When the status you read in Step 1 is `publish`, also include `status: \"draft\"` in the SAME call"),
+    "the write step demotes a post whose status is publish",
+  );
+  assert.ok(
+    system.includes("When the status you read in Step 1 is anything other than `publish`, omit the `status` field."),
+    "the write step keeps every other status",
+  );
+  assert.ok(STATUS_LABEL.includes("publish") && STATUS_LABEL.includes("offline") && STATUS_LABEL.includes("draft"));
 });
 
 test("every other step that can reach a connector declares publishes false or is read only", () => {

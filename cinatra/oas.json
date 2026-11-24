@@ -1458,12 +1458,12 @@
               "input": "instanceId"
             },
             {
-              "label": "Post",
-              "input": "postId"
-            },
-            {
               "label": "Current title",
               "input": "title"
+            },
+            {
+              "label": "Status (if publish, the edit takes it offline as draft)",
+              "input": "status"
             },
             {
               "label": "Requested change",
