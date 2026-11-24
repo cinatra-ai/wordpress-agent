@@ -1195,6 +1195,7 @@
       "metadata": {
         "cinatra": {
           "riskClass": "write",
+          "publishes": false,
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
           "description": "The agent files the page snapshot with the published and the proposed words."
@@ -1252,6 +1253,7 @@
       "metadata": {
         "cinatra": {
           "riskClass": "write",
+          "publishes": false,
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
           "description": "The agent names the filed page snapshot to the application, which reviews it."
@@ -1449,6 +1451,25 @@
       "metadata": {
         "cinatra": {
           "riskClass": "write",
+          "publishes": true,
+          "publishRows": [
+            {
+              "label": "WordPress site",
+              "input": "instanceId"
+            },
+            {
+              "label": "Post",
+              "input": "postId"
+            },
+            {
+              "label": "Current title",
+              "input": "title"
+            },
+            {
+              "label": "Requested change",
+              "input": "instructions"
+            }
+          ],
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent"
         }
