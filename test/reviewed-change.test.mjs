@@ -84,6 +84,7 @@ const readInputs = (read = READ) => ({
   excerpt: JSON.stringify(read.excerpt),
   status: JSON.stringify(READ_STATE.status),
   modified: JSON.stringify(READ_STATE.modified),
+  rowToken: JSON.stringify("a".repeat(64)),
   address: JSON.stringify(READ_STATE.address),
   error: JSON.stringify(READ_STATE.error),
 });
@@ -342,10 +343,13 @@ test("T13 a post of 5,000 blocks with one changed block compares only the change
   const entries = compareBlocks(blocksOf(before), blocksOf(after), () => assert.fail("not refused"), meter);
   assert.ok(meter.cells > 0 && meter.cells <= 16, `the table holds the changed blocks only, not ${meter.cells} cells`);
   assert.equal(entries.filter((e) => e.op !== "same").length, 2, "one block removed, one added");
-  const form = await formOf({ title: null, content: after, excerpt: null }, { ...READ, content: before });
+  // A post whose save fits the connector's limit (5,000 blocks twice do not; F26 covers that refusal).
+  const smaller = manyBlocks(1000);
+  const changed = manyBlocks(1000, (i) => (i === 500 ? "<!-- wp:paragraph -->\n<p>Block 500, changed.</p>\n<!-- /wp:paragraph -->\n\n" : null));
+  const form = await formOf({ title: null, content: changed, excerpt: null }, { ...READ, content: smaller });
   assert.equal(form.excerpts.length, 1);
-  assert.ok(form.excerpts[0].proposed.includes("Block 2500, changed."));
-  assert.ok(form.excerpts[0].published.includes("Block 2500."));
+  assert.ok(form.excerpts[0].proposed.includes("Block 500, changed."));
+  assert.ok(form.excerpts[0].published.includes("Block 500."));
 });
 
 test("T14 a change whose compared part is too large is refused, at the form and at the read-back", async () => {

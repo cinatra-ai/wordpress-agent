@@ -2137,6 +2137,30 @@
         "$component_ref": "end"
       },
       "destination_input": "message"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "check_read_to_form_page_rowToken",
+      "source_node": {
+        "$component_ref": "check_read"
+      },
+      "source_output": "rowToken",
+      "destination_node": {
+        "$component_ref": "form_page"
+      },
+      "destination_input": "rowToken"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "check_read_to_read_reviewed_page_rowToken",
+      "source_node": {
+        "$component_ref": "check_read"
+      },
+      "source_output": "rowToken",
+      "destination_node": {
+        "$component_ref": "read_reviewed_page"
+      },
+      "destination_input": "rowToken"
     }
   ],
   "$referenced_components": {
@@ -2723,7 +2747,8 @@
             "status": "{# pyagentspec-input-hint (do not remove): {{ status }} #}{{ status | tojson }}",
             "modified": "{# pyagentspec-input-hint (do not remove): {{ modified }} #}{{ modified | tojson }}",
             "address": "{# pyagentspec-input-hint (do not remove): {{ address }} #}{{ address | tojson }}",
-            "error": "{# pyagentspec-input-hint (do not remove): {{ error }} #}{{ error | tojson }}"
+            "error": "{# pyagentspec-input-hint (do not remove): {{ error }} #}{{ error | tojson }}",
+            "rowToken": "{# pyagentspec-input-hint (do not remove): {{ rowToken }} #}{{ rowToken | tojson }}"
           }
         },
         "agent_run_id": "{{ cinatra_run_id }}"
@@ -2801,6 +2826,11 @@
         },
         {
           "title": "modified",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "rowToken",
           "type": "string",
           "default": ""
         },
@@ -3258,7 +3288,8 @@
             "status": "{# pyagentspec-input-hint (do not remove): {{ status }} #}{{ status | tojson }}",
             "modified": "{# pyagentspec-input-hint (do not remove): {{ modified }} #}{{ modified | tojson }}",
             "address": "{# pyagentspec-input-hint (do not remove): {{ address }} #}{{ address | tojson }}",
-            "error": "{# pyagentspec-input-hint (do not remove): {{ error }} #}{{ error | tojson }}"
+            "error": "{# pyagentspec-input-hint (do not remove): {{ error }} #}{{ error | tojson }}",
+            "rowToken": "{# pyagentspec-input-hint (do not remove): {{ rowToken }} #}{{ rowToken | tojson }}"
           }
         },
         "agent_run_id": "{{ cinatra_run_id }}"
@@ -3306,6 +3337,11 @@
         },
         {
           "title": "modified",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "rowToken",
           "type": "string",
           "default": ""
         },

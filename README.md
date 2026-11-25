@@ -8,11 +8,11 @@ Edit a post or page on a connected WordPress site from a plain instruction — "
 
 **Configuration.** Supply `instanceId` (your WordPress site), `postId`, `postType` (a hint: `post`, `page` or empty), and a plain-language `instructions` string. `postStatus` is not used.
 
-**Usage.** Trigger from the content editor or the A2A API: `/api/agents/wordpress-content-editor/stream`. Review the snapshot (each changed block as source text), then release the save on the publish card. A published post becomes a draft. If the page changed meanwhile, nothing is written and you review a new proposal.
+**Usage.** Trigger from the content editor or the A2A API: `/api/agents/wordpress-content-editor/stream`. Review the snapshot (each changed block as source text), then release the save on the publish card. A published post becomes a draft. If the page changed meanwhile, you review a new proposal.
 
 **Development.** Start the stack with `docker compose --profile wordpress up -d`. Runs on port 3021; override with `WP_CONTENT_EDITOR_A2A_URL` in `.env.local`.
 
-**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId`, `changes: [{field, before, after}]` (after: the stored value; a demote adds status), `message`. Refused by the site: empty `changes`, `error.code` (`site_policy_conflict`, `permission_unverified`, `post_locked`, `unsupported_status`, `invalid`, `not_found`, `unsupported_storage`, `db_error`) and a plain `message`; nothing written. Failed runs: `run_input_invalid` (nothing read), `post_read_unavailable`, `page_form_unavailable`, `reviewed_change_unavailable`, `write_answer_unreadable` (check the post).
+**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId`, `changes: [{field, before, after}]` (after: the stored value; a demote adds status), `message`. Refused by the site: empty `changes`, `error.code` (`site_policy_conflict`, `permission_unverified`, `post_locked`, `unsupported_status`, `invalid`, `not_found`, `unsupported_storage`, `db_error`) and a plain `message`; nothing written. Failed runs: `run_input_invalid` (nothing read), `post_read_unavailable`, `page_form_unavailable` (also: change too large), `reviewed_change_unavailable`, `write_answer_unreadable` (check the post).
 
 **Troubleshooting.** A `500` often means an unknown `instanceId`. Empty `changes`, no `error`: no change was proposed; `message` repeats the request.
 

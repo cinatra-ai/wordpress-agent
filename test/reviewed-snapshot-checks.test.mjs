@@ -69,6 +69,7 @@ const readInputs = (read = READ) => ({
   excerpt: JSON.stringify(read.excerpt),
   status: JSON.stringify(read.status),
   modified: JSON.stringify(read.modified),
+  rowToken: JSON.stringify("a".repeat(64)),
   address: JSON.stringify(read.address),
   error: JSON.stringify(read.error),
 });

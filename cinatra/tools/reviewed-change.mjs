@@ -676,6 +676,103 @@ export function checkedSnapshot(form, page, refuse) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE SIZE OF THE WRITE. The publishing step sends one `argsJson` text: the
+// write template of cinatra/oas.json rendered by the flow runtime, which
+// carries the five values as read AND the reviewed values, so a content can be
+// in it twice. The connector takes a text of at most 256 KiB in UTF-8
+// (wordpress-mcp-connector src/mcp/handlers.ts SITE_TOOL_ARGS_JSON_MAX_BYTES)
+// and refuses a longer one. So `form` measures that exact text before anything
+// is filed for review, and `read` measures it again for the approved revision;
+// a change whose text is longer is refused there, and nothing is written.
+// ---------------------------------------------------------------------------
+
+/** The most bytes of an `argsJson` text the connector takes. */
+export const SEND_MAX_BYTES = 256 * 1024;
+
+/** Python's json.dumps escape of one string with ASCII output (`ensure_ascii`), as `tojson` writes it. */
+function pythonJsonString(text) {
+  const SHORT = { 0x22: '\\"', 0x5c: "\\\\", 0x08: "\\b", 0x0c: "\\f", 0x0a: "\\n", 0x0d: "\\r", 0x09: "\\t" };
+  let out = '"';
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (SHORT[unit] !== undefined) out += SHORT[unit];
+    else if (unit >= 0x20 && unit <= 0x7e) out += text[i];
+    // Every other UTF-16 unit (so U+007F, and each half of a character outside
+    // the BMP) becomes \u and four lower-case hex digits.
+    else out += `\\u${unit.toString(16).padStart(4, "0")}`;
+  }
+  return `${out}"`;
+}
+
+/** Python's repr of a number as json.dumps writes it (a whole number as an int). */
+function pythonJsonNumber(value) {
+  if (!Number.isFinite(value)) throw new Error("reviewed_change: a value to send is not a finite number");
+  if (Number.isInteger(value)) return BigInt(value).toString();
+  const [mantissa, exponentText] = value.toExponential().split("e");
+  const exponent = Number(exponentText);
+  if (exponent >= -4 && exponent < 16) return String(value);
+  return `${mantissa}e${exponent < 0 ? "-" : "+"}${String(Math.abs(exponent)).padStart(2, "0")}`;
+}
+
+/**
+ * THE TEXT `{{ value | tojson }}` RENDERS TO in the flow runtime. wayflowcore
+ * 26.1.2 renders an ApiNode's data with `render_str_template`
+ * (`_utils/_templating_helpers.py:482-492`), which sets `json.dumps_kwargs` to
+ * `{"sort_keys": False}`; Jinja 3.1.6 `do_tojson` calls `htmlsafe_json_dumps`
+ * (`jinja2/utils.py:637-673`). So: Python's json.dumps with its defaults
+ * (separators ", " and ": ", `ensure_ascii`, keys in the order the value holds
+ * them), then each < > & ' written as \u003c, \u003e, \u0026 and \u0027. The
+ * size check below and the tests' renderer both use this one function.
+ */
+export function tojsonText(value) {
+  const dumps = (v) => {
+    if (v === null) return "null";
+    if (v === true) return "true";
+    if (v === false) return "false";
+    if (typeof v === "string") return pythonJsonString(v);
+    if (typeof v === "number") return pythonJsonNumber(v);
+    if (Array.isArray(v)) return `[${v.map(dumps).join(", ")}]`;
+    if (isPlainObject(v)) return `{${Object.entries(v).map(([k, item]) => `${pythonJsonString(k)}: ${dumps(item)}`).join(", ")}}`;
+    throw new Error("reviewed_change: a value to send is not JSON");
+  };
+  return dumps(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026").replace(/'/g, "\\u0027");
+}
+
+/**
+ * The write step's `argsJson` as the runtime renders `write_page`'s template:
+ * the same literal punctuation, a `tojson` per value, a reviewed value only
+ * when it is not empty (`{% if reviewedTitle %}`), and the demotion of a
+ * published post. A test renders the template of cinatra/oas.json for every
+ * shape it takes and requires this text byte for byte, so the two cannot drift.
+ */
+export function writeArgsText(read, reviewed) {
+  const t = tojsonText;
+  let text = `{"post_id": ${t(read.postId)}, "if_unmodified_since": ${t(read.modified)}, "expected": {"title": ${t(read.title)}, "content": ${t(read.content)}, "excerpt": ${t(read.excerpt)}, "status": ${t(read.status)}, "row_token": ${t(read.rowToken)}}`;
+  for (const field of FIELDS) {
+    const value = reviewed[field] ?? "";
+    if (value !== "") text += `, ${t(field)}: ${t(value)}`;
+  }
+  if (read.status === "publish") text += ', "status": "draft"';
+  return `${text}}`;
+}
+
+/** Refuses a change whose write text, as the publishing step would send it, is longer than the connector takes. */
+function checkedWriteSize(call, post, writeFields, refuse) {
+  const rowToken = textInput(call.rowToken);
+  if (rowToken === undefined || !ROW_TOKEN_FORM.test(rowToken)) refuse("the read answered no row token, so the save cannot be measured");
+  const sent = writeArgsText(
+    { postId: Number(post.postId), modified: textInput(call.modified), title: post.title, content: post.content, excerpt: post.excerpt, status: post.status, rowToken },
+    writeFields,
+  );
+  const bytes = new TextEncoder().encode(sent).length;
+  if (bytes > SEND_MAX_BYTES) {
+    refuse(
+      `the save of this change would send ${bytes} bytes to the site, more than the ${SEND_MAX_BYTES} bytes the WordPress connector takes in one call, so ask for a smaller change or make it on the site`,
+    );
+  }
+}
+
 // --- form ------------------------------------------------------------------
 
 function form(call) {
@@ -692,6 +789,7 @@ function form(call) {
   const page = pageOf(read);
   const pageForm = { cinatraCmsPage: 1, system: "wordpress", page, writeFields, excerpts: excerptsOf(read, writeFields, refuse) };
   checkedSnapshot(pageForm, page, refuse);
+  checkedWriteSize(call, read, writeFields, refuse);
   return { ok: true, next: "review", pageForm };
 }
 
@@ -802,6 +900,7 @@ async function read(call, ports) {
   if (shown(derived) !== shown(snapshot.excerpts)) {
     refuse("the values to save in the reviewed revision differ from the excerpts it shows");
   }
+  checkedWriteSize(call, post, writeFields, refuse);
   return {
     ok: true,
     reviewedTitle: writeFields.title ?? "",

@@ -355,6 +355,7 @@ test("S3: the compose step answers the values to save, and the filed form shows 
       excerpt: JSON.stringify(read.excerpt),
       status: JSON.stringify("publish"),
       modified: JSON.stringify("2026-11-20 10:00:00"),
+      rowToken: JSON.stringify("a".repeat(64)),
       address: JSON.stringify("https://example.org/opening-hours/"),
       error: JSON.stringify({ code: "", message: "" }),
     },

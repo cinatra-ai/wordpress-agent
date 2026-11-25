@@ -17,8 +17,9 @@
 // `reviewed_change` tool (ops `page` and `outcome`) with fake inputs, and the
 // write step's `argsJson` template, rendered by a small renderer below that
 // copies the runtime's rules for the constructs the template uses (comments,
-// `{% if %}`, `tojson`, `int`; `tojson` as Jinja writes it: keys sorted,
-// non-ASCII and the characters < > & ' as \u escapes). What it does not
+// `{% if %}`, `tojson`; `tojson` is the pack's `tojsonText`, the runtime's
+// form: keys in their order, separators ", " and ": ", non-ASCII and the
+// characters < > & ' as \u escapes). What it does not
 // execute: the host's passthrough road, the connector, the site and the flow
 // runtime.
 //
@@ -72,6 +73,7 @@ const controlInto = (node) =>
   oas.control_flow_connections.filter((e) => e.to_node.$component_ref === node).map((e) => e.from_node.$component_ref);
 const titles = (list) => (list ?? []).map((entry) => entry.title);
 const load = () => import("../cinatra/tools/reviewed-change.mjs");
+const tool = await load();
 
 /** Every node the control flow reaches from `from` without passing through `avoid`. */
 function reachable(from, avoid) {
@@ -91,19 +93,14 @@ function reachable(from, avoid) {
 
 // --- a renderer for the constructs the write template uses --------------------
 
-const PY_ESCAPES = { "<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "'": "\\u0027" };
-/** Jinja's `tojson`: json.dumps with sorted keys and ASCII output, then < > & ' escaped. */
+/**
+ * Jinja's `tojson` as the flow runtime runs it: the pack's own `tojsonText`,
+ * the ONE function that also measures the write's text before the review
+ * (json.dumps without sorted keys, separators ", " and ": ", ASCII output,
+ * then < > & ' as \u escapes; F23 pins it to Python's own output).
+ */
 function tojson(value) {
-  const sorted = (v) =>
-    Array.isArray(v)
-      ? v.map(sorted)
-      : v !== null && typeof v === "object"
-        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])]))
-        : v;
-  const text = JSON.stringify(sorted(value) ?? null)
-    .replace(/[\u007f-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
-    .replace(/[<>&']/g, (c) => PY_ESCAPES[c]);
-  return text;
+  return tool.tojsonText(value);
 }
 /** Jinja's `int`: a whole number from a text or a number, else 0. */
 function toInt(value) {
@@ -558,4 +555,166 @@ test("F22 the write's post id is the read's answer, which the check of the read 
   await assert.rejects(extensionTool({ input: call, ports: {} }), refusedWith("post_read_unavailable"));
   const ok = await extensionTool({ input: { ...pageCall(readAnswer()), postId: JSON.stringify(42) }, ports: {} });
   assert.equal(ok.postId, "42");
+});
+
+// --- nothing goes to the review that the write cannot send ------------------------
+
+const SEND_TEMPLATE = parts[WRITE_STEP].data.input.argsJson;
+const bytesOf = (text) => new TextEncoder().encode(text).length;
+/** The write's argsJson as the runtime renders the real template of cinatra/oas.json. */
+const sentText = (v) =>
+  render(SEND_TEMPLATE, {
+    postId: v.postId ?? 42,
+    modified: v.modified ?? "2026-11-20 10:00:00",
+    title: v.title,
+    content: v.content,
+    excerpt: v.excerpt,
+    status: v.status ?? "draft",
+    rowToken: v.rowToken ?? TOKEN,
+    reviewedTitle: v.reviewedTitle ?? "",
+    reviewedContent: v.reviewedContent ?? "",
+    reviewedExcerpt: v.reviewedExcerpt ?? "",
+    reviewedRevisionId: "",
+    reviewedSnapshot: [],
+  });
+
+test("F23 tojsonText writes what the runtime's tojson writes: Python's json.dumps, keys unsorted, then < > & ' escaped", () => {
+  // Each expected text is the output of Python's json.dumps(value, sort_keys=False)
+  // with Jinja 3.1.6's htmlsafe_json_dumps replacements (jinja2/utils.py:637-673;
+  // wayflowcore 26.1.2 _utils/_templating_helpers.py:489 sets sort_keys False).
+  assert.equal(tool.tojsonText({ b: 1, a: [1, "x", null, true, false] }), '{"b": 1, "a": [1, "x", null, true, false]}');
+  assert.equal(
+    tool.tojsonText("é<>&'\u007f\u{1F600}\n\"\\\t \u0001"),
+    '"\\u00e9\\u003c\\u003e\\u0026\\u0027\\u007f\\ud83d\\ude00\\n\\"\\\\\\t\\u2028\\u0001"',
+  );
+  assert.equal(tool.tojsonText(42), "42");
+  assert.equal(tool.tojsonText(1.5), "1.5");
+  assert.equal(tool.tojsonText("plain"), '"plain"');
+});
+
+test("F24 the rendered argsJson parses back to the same values, with the template's own key order and separators", () => {
+  const v = { title: "Café <b> & 'x'", content: "<p>\u{1F600}\n\"q\"</p>", excerpt: "\u007f ", status: "publish", reviewedTitle: "Neu & <i>", reviewedContent: "<p>é</p>" };
+  const text = sentText(v);
+  assert.match(text, /^\{"post_id": 42, "if_unmodified_since": "2026-11-20 10:00:00", "expected": \{"title": /);
+  assert.equal(/[^\x20-\x7e]/.test(text), false, "the rendered text is ASCII");
+  const parsed = JSON.parse(text);
+  assert.deepEqual(Object.keys(parsed), ["post_id", "if_unmodified_since", "expected", "title", "content", "status"]);
+  assert.deepEqual(parsed.expected, { title: v.title, content: v.content, excerpt: v.excerpt, status: "publish", row_token: TOKEN });
+  assert.equal(parsed.title, v.reviewedTitle);
+  assert.equal(parsed.content, v.reviewedContent);
+  assert.equal(parsed.status, "draft");
+});
+
+test("F25 the tool's text of the write is byte for byte the rendered template, for every shape the template takes", () => {
+  const values = { title: "T é <", content: "<p>C & \u{1F600}</p>", excerpt: "E '", modified: "2026-11-20 10:00:00", rowToken: TOKEN };
+  for (const status of ["publish", "draft"]) {
+    for (let mask = 1; mask < 8; mask += 1) {
+      const reviewed = {
+        title: mask & 1 ? "New <t>" : null,
+        content: mask & 2 ? "<p>new ü</p>" : null,
+        excerpt: mask & 4 ? "new 'e'" : null,
+      };
+      const expected = sentText({ ...values, status, reviewedTitle: reviewed.title ?? "", reviewedContent: reviewed.content ?? "", reviewedExcerpt: reviewed.excerpt ?? "" });
+      assert.equal(tool.writeArgsText({ postId: 42, ...values, status }, reviewed), expected, `status ${status}, fields ${mask}`);
+    }
+  }
+});
+
+/** The form step's call for a read whose content is `content`, proposing `writeFields`. */
+const formCall = (read, writeFields) => ({
+  op: "form",
+  pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", writeFields }),
+  postId: JSON.stringify("42"),
+  readPostId: JSON.stringify("42"),
+  title: JSON.stringify(read.title),
+  content: JSON.stringify(read.content),
+  excerpt: JSON.stringify(read.excerpt),
+  status: JSON.stringify(read.status ?? "draft"),
+  modified: JSON.stringify("2026-11-20 10:00:00"),
+  address: JSON.stringify("https://example.org/p/"),
+  rowToken: JSON.stringify(TOKEN),
+  error: JSON.stringify({ code: "", message: "" }),
+});
+
+/** A read whose rendered write text, for a title change, is exactly `bytes` long; the pad holds `unit` as often as fits. */
+function readOfSize(bytes, unit) {
+  const base = { title: "Hours", excerpt: "", status: "draft" };
+  const textFor = (pad) => sentText({ ...base, content: `<p>${pad}</p>`, reviewedTitle: "Opening hours" });
+  const empty = bytesOf(textFor(""));
+  const unitBytes = bytesOf(tojson(unit)) - 2;
+  const units = Math.floor((bytes - empty) / unitBytes);
+  const pad = unit.repeat(units) + "a".repeat(bytes - empty - units * unitBytes);
+  const read = { ...base, content: `<p>${pad}</p>` };
+  assert.equal(bytesOf(textFor(pad)), bytes, "the read renders to the size asked for");
+  return read;
+}
+
+test("F26 a change whose write text is exactly at the connector's limit goes to the review; one byte more is refused before it", async () => {
+  const { extensionTool, SEND_MAX_BYTES } = tool;
+  assert.equal(SEND_MAX_BYTES, 256 * 1024, "the connector's limit: SITE_TOOL_ARGS_JSON_MAX_BYTES");
+  for (const unit of ["a", "é", "<", "&'>", "\u{1F600}", "\u007f"]) {
+    const at = readOfSize(SEND_MAX_BYTES, unit);
+    const ok = await extensionTool({ input: formCall(at, { title: "Opening hours", content: null, excerpt: null }), ports: {} });
+    assert.equal(ok.next, "review", `at the limit (${JSON.stringify(unit)})`);
+    const over = readOfSize(SEND_MAX_BYTES + 1, unit);
+    await assert.rejects(
+      extensionTool({ input: formCall(over, { title: "Opening hours", content: null, excerpt: null }), ports: {} }),
+      (err) =>
+        refusedWith("page_form_unavailable")(err) &&
+        err.message.includes(`${SEND_MAX_BYTES + 1} bytes`) &&
+        err.message.includes(`${SEND_MAX_BYTES} bytes the WordPress connector takes`),
+      `one byte over (${JSON.stringify(unit)})`,
+    );
+  }
+});
+
+test("F27 a content that fits once but not twice (as read and as reviewed) is refused before the review", async () => {
+  const { extensionTool, SEND_MAX_BYTES } = tool;
+  const big = `<p>${"word ".repeat(Math.ceil((SEND_MAX_BYTES * 0.6) / 5))}</p>`;
+  const read = { title: "Hours", content: big, excerpt: "", status: "draft" };
+  assert.ok(bytesOf(sentText({ ...read })) < SEND_MAX_BYTES, "the read alone fits");
+  await assert.rejects(
+    extensionTool({ input: formCall(read, { title: null, content: big.replace("word", "Word"), excerpt: null }), ports: {} }),
+    refusedWith("page_form_unavailable"),
+  );
+});
+
+test("F28 the read-back of the approved revision measures the write text again and refuses one that is too long", async () => {
+  const { extensionTool, SEND_MAX_BYTES } = tool;
+  const read = { title: "Hours", content: "<p>Open</p>", excerpt: "", status: "draft" };
+  const filed = await extensionTool({ input: formCall(read, { title: "Opening hours", content: null, excerpt: null }), ports: {} });
+  assert.equal(filed.next, "review");
+  const revision = { artifactId: "artifact-7", representationRevisionId: "revision-1" };
+  const answer = JSON.stringify({
+    approved: true,
+    review: { envelopeVersion: 1, decision: "approved", reviewTaskId: "task-1", comment: null, targets: [revision] },
+  });
+  const ports = {
+    artifacts: {
+      async contentRead(request) {
+        return { ...request, mime: "application/json", text: JSON.stringify(filed.pageForm), truncated: false };
+      },
+    },
+  };
+  const readBack = (excerpt) => ({
+    ...formCall({ ...read, excerpt }, null),
+    op: "read",
+    pageForm: undefined,
+    artifactId: JSON.stringify(revision.artifactId),
+    reviewAnswer: JSON.stringify(answer),
+  });
+  const ok = await extensionTool({ input: readBack(""), ports });
+  assert.equal(ok.reviewedTitle, "Opening hours");
+  // The excerpt as read is not shown and not saved, but the write sends it as an expected value.
+  await assert.rejects(
+    extensionTool({ input: readBack("x".repeat(SEND_MAX_BYTES)), ports }),
+    (err) => refusedWith("reviewed_change_unavailable")(err) && err.message.includes(`${SEND_MAX_BYTES} bytes the WordPress connector takes`),
+  );
+});
+
+test("F29 the form step and the read-back take the row token the write sends, from the check of the read", () => {
+  for (const node of ["form_page", REVIEWED_READ]) {
+    assert.deepEqual(sourcesOf(node, "rowToken"), [[CHECK_STEP, "rowToken"]], node);
+  }
+  assert.deepEqual(sourcesOf(WRITE_STEP, "rowToken"), [[READ_STEP, "row_token"]]);
 });
