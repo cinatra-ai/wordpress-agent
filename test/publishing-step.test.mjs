@@ -1,20 +1,19 @@
 // cinatra-ai/cinatra#3745 — the write step is the flow's one publishing step.
 //
-// On an agent run the application refuses every call of
-// `wordpress_site_tool_write` (its registration declares `outward`) unless the
-// run's top-level publishing step, `metadata.cinatra.publishes: true`, has a
-// person's released publish decision. So the `edit` step declares it, with the
-// rows the publish card shows. The application opens that card only after an
-// approved artifact review earlier in the same run; `page_review_gate` is that
-// review. Between the review and the write, `read_reviewed_page` reads back the
-// revision the review approved, and the write step saves only its values.
+// On an agent run the application serves `wordpress_site_tool_write` (its
+// registration declares `outward` and `passthroughStep: "publishing"`) only to
+// the run's top-level publishing step, `metadata.cinatra.publishes: true`,
+// after a person released its publish decision. So `write_page` declares it,
+// with the rows the publish card shows. The application opens that card only
+// after an approved artifact review earlier in the same run; `page_review_gate`
+// is that review. Between the review and the write, `read_reviewed_page` reads
+// back the revision the review approved, and the write step saves only its
+// values, with no model in between.
 //
-// The card is shown only on a run that has a change to save: a request on a
-// page ends the run failed at the compose step, and a request that changes
-// nothing ends it completed by a branch past the filing and the review, both
-// before anything is filed, reviewed or shown on a card. On the card, the
-// status row's label states the demotion as a rule of the save, so it is true
-// also when a check of the write step stops the run before the save.
+// The card is shown only on a run that has a change to save: a request that
+// changes nothing ends the run completed by a branch past the filing and the
+// review. The site writes only if the post is unchanged since the read; else it
+// refuses and writes nothing, so a refusal makes no demotion either.
 //
 // What this file executes: it reads `cinatra/oas.json` and checks its shape
 // against the rules of two readers, the application's compiler
@@ -35,18 +34,19 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const oas = JSON.parse(readFileSync(join(root, "cinatra", "oas.json"), "utf8"));
 const parts = oas.$referenced_components;
 
-const WRITE_STEP = "edit";
+const WRITE_STEP = "write_page";
 const REVIEW_STEP = "page_review_gate";
 const REVIEWED_READ = "read_reviewed_page";
+const READ_TOOL = "wordpress_site_tool_call";
 const COMPOSE_STEP = "compose_change";
 const ACTION_KINDS = ["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"];
 const NO_CONNECTOR_KINDS = ["StartNode", "EndNode", "InputMessageNode", "OutputMessageNode", "BranchingNode"];
-const STATUS_LABEL = "Status (if publish, saving makes it an offline draft)";
+const STATUS_LABEL = "Status as read (a published post becomes a draft)";
 const ROWS = [
   { label: "WordPress site", input: "instanceId" },
-  { label: "Current title", input: "title" },
+  { label: "Page title as read", input: "title" },
   { label: STATUS_LABEL, input: "status" },
-  { label: "Requested change", input: "instructions" },
+  { kind: "artifacts", label: "Reviewed change", input: "reviewedSnapshot" },
 ];
 
 const cinatraOf = (component) => component?.metadata?.cinatra ?? {};
@@ -81,11 +81,11 @@ test("the write step is the one step declared publishes: true, a top-level actio
 });
 
 test("the write step is the step that calls the outward write tool", () => {
-  const callers = topLevelIds().filter((id) => JSON.stringify(parts[id]).includes("wordpress_site_tool_write"));
+  const callers = topLevelIds().filter((id) => JSON.stringify(parts[id].data ?? {}).includes("wordpress_site_tool_write"));
   assert.deepEqual(callers, [WRITE_STEP]);
 });
 
-test("the publish card shows the site, the current title, the status with the rule of the save and the requested change", () => {
+test("the publish card shows the site, the title and status as read with the rule of the save, and the reviewed revision", () => {
   assert.deepEqual(cinatraOf(parts[WRITE_STEP]).publishRows, ROWS);
   const titles = parts[WRITE_STEP].inputs.map((input) => input.title);
   for (const row of ROWS) {
@@ -105,82 +105,48 @@ test("the status row shows the value the write step decides the demotion on, und
   );
   assert.deepEqual(
     into.map((edge) => [edge.source_node.$component_ref, edge.source_output]),
-    [["read_page", "status"]],
+    [["read_page", "post_status"]],
     "the status input comes only from the read step",
   );
-  const { system, user } = parts[WRITE_STEP].data;
-  assert.ok(user.includes("- status: {{ status }}"), "the write step gets that status");
-  const step2 = section(system, "**STEP 2", "**STEP 3");
-  assert.ok(
-    step2.includes("When the status you read in Step 1 is `publish`, also include `status: \"draft\"` in the SAME call"),
-    "the save demotes a post whose status is publish",
-  );
-  assert.ok(
-    step2.includes("When the status you read in Step 1 is anything other than `publish`, omit the `status` field."),
-    "the save keeps every other status",
-  );
-  assert.ok(STATUS_LABEL.startsWith("Status (if publish, saving "), "the label states the demotion as a rule of the save");
-  assert.ok(STATUS_LABEL.includes("offline") && STATUS_LABEL.includes("draft"));
+  const template = parts[WRITE_STEP].data.input.argsJson;
+  assert.ok(template.includes('{% if status == "publish" %}, "status": "draft"{% endif %}'), "the save demotes a post whose status is publish, and keeps every other");
+  assert.ok(template.includes('"status": {{ status | tojson }}'), "the status as read is an expected value");
+  assert.ok(STATUS_LABEL.includes("published") && STATUS_LABEL.includes("draft"), "the label states the demotion as a rule of the save");
 });
 
-// The branches of a run that save nothing. Each one either ends the run before
-// the card, or is a stop of the write step that makes no write and so no
-// demotion.
-test("a request on a page ends the run at the compose step, and a request that changes nothing ends it completed past the filing, both before the card", () => {
+// The branches of a run that save nothing. Each one ends the run before the
+// card, or is a refusal of the site that writes nothing and so no demotion.
+test("a request that changes nothing ends the run completed past the filing, before the card", () => {
   const compose = parts[COMPOSE_STEP];
   const system = collapse(compose.data.system);
-  assert.ok(system.includes("When `postType` is `page`, answer `error.code` `\"page_editing_unsupported\"`"));
   assert.ok(system.includes("answer every `writeFields` member null and the empty string in `error.code` and in `error.message`"));
-  assert.equal(system.includes("nothing_to_change"), false, "a change of nothing is no error");
+  assert.equal(system.includes("page_editing_unsupported"), false, "a page can be edited: the site ability writes posts and pages");
   assert.ok(system.includes("the run ends completed with no changes, before anything is filed, reviewed or written"));
   const intoWrite = oas.control_flow_connections.filter((edge) => edge.to_node.$component_ref === WRITE_STEP).map((edge) => edge.from_node.$component_ref);
   assert.deepEqual(intoWrite, [REVIEWED_READ], "the no-change road never reaches the card of the write step");
-  assert.ok(compose.outputs.some((output) => output.title === "error"), "the compose step answers its error");
   assert.equal(has(compose.data, "completed_error_codes"), false, "an error of the compose step ends the run failed");
   const road = topLevelIds();
   assert.ok(road.indexOf(COMPOSE_STEP) < road.indexOf("file_page"), "the compose step comes before the filing");
   assert.ok(road.indexOf("file_page") < road.indexOf(REVIEW_STEP) && road.indexOf(REVIEW_STEP) < road.indexOf(WRITE_STEP));
-  assert.deepEqual(
-    oas.control_flow_connections.filter((edge) => edge.from_node.$component_ref === COMPOSE_STEP).map((edge) => edge.to_node.$component_ref),
-    ["form_page"],
-    "the compose step has one way on, to the derivation of the filed form",
-  );
 });
 
-test("a stop of the write step makes no write, so it makes no demotion", () => {
-  const system = collapse(parts[WRITE_STEP].data.system);
-  const step1 = section(system, "**STEP 1", "**STEP 2");
-  assert.ok(step1.includes("a check that fails ends this step with the result it names, and NO write is made"));
-  assert.ok(step1.includes("return the STOPPED RESULT with `code: \"reviewed_change_unavailable\"`"));
-  assert.ok(step1.includes("return the STOPPED RESULT with `code: \"post_changed\"`"));
-  assert.ok(step1.includes("return the `page_editing_unsupported` ERROR RESULT"));
-  assert.ok(system.includes("NO write was made and a published post STAYS published"));
-  assert.ok(system.includes("never a write of its own"), "the demotion rides only on the save");
-});
-
-// What this checks: the write step re-reads the post and compares its change
-// time and status with the read the review was based on, before the update.
-// What it does not give: an atomic save. `ewpa/update-post` takes no expected
-// change time or revision, so the update is unconditional and an edit saved on
-// the site between this re-read and the update is overwritten.
-test("before the save, the write step re-reads the post and stops when it changed during the review; the update itself is unconditional", () => {
+// What this checks: the save is conditional at the site. The ability
+// `cinatra/post-update-if-unchanged` compares, under a row lock, the change
+// time, the four values as read and the row token with the stored post, and
+// writes nothing when one differs (`post_changed`). There is no re-read before
+// the write and no window between a check and an unconditional update.
+test("the save is made only if the post is unchanged since the read: change time, the four values and the row token", () => {
   const into = (input) =>
     oas.data_flow_connections
       .filter((edge) => edge.destination_node.$component_ref === WRITE_STEP && edge.destination_input === input)
       .map((edge) => [edge.source_node.$component_ref, edge.source_output]);
-  assert.deepEqual(into("modified"), [["read_page", "modified"]], "the change time the review was based on comes from the read step");
-  assert.deepEqual(into("status"), [["read_page", "status"]]);
-  const step1 = collapse(section(parts[WRITE_STEP].data.system, "**STEP 1", "**STEP 2"));
-  assert.ok(step1.includes("call `wordpress_site_tool_call` with `toolName: \"ewpa/get-post\"`"), "Step 1 re-reads the post");
-  assert.ok(
-    step1.includes(
-      "The post is unchanged only when the `modified` handed to you is not empty, the `modified` of this response EXACTLY equals it, and the `status` of this response EXACTLY equals the `status` handed to you.",
-    ),
-    "Step 1 compares the change time and the status",
-  );
-  const step2 = section(parts[WRITE_STEP].data.system, "**STEP 2", "**STEP 3");
-  assert.equal(step2.includes("wordpress_site_tool_call"), false, "the save step itself reads nothing");
-  assert.ok(step2.includes("`args: { post_id, title?, content?, excerpt?, status? }`"), "the update carries no expected change time or revision");
+  assert.deepEqual(into("modified"), [["read_page", "post_modified_gmt"]]);
+  assert.deepEqual(into("rowToken"), [["read_page", "row_token"]]);
+  const template = parts[WRITE_STEP].data.input.argsJson;
+  assert.ok(template.includes('"if_unmodified_since": {{ modified | tojson }}'));
+  assert.ok(template.includes('"row_token": {{ rowToken | tojson }}'));
+  assert.equal(JSON.stringify(parts[WRITE_STEP].data).includes(READ_TOOL), false, "the write step reads nothing");
+  assert.equal(JSON.stringify(oas).includes("ewpa/update-post"), false, "the unconditional update is not used anywhere");
 });
 
 test("every other step that can reach a connector declares publishes false or is read only", () => {

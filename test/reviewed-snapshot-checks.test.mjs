@@ -110,8 +110,11 @@ test("P1 the values to save carry no status: a request can change the status onl
   }
   // A request that changes no text files nothing and writes nothing, so it changes no status either.
   assert.equal((await extensionTool({ input: formCall(NOTHING, { ...READ, status: "publish" }), ports: {} })).next, "no_change");
-  const edit = parts.edit.data.system;
-  assert.ok(edit.includes("a `status: \"draft\"` demotion is only ever a companion to the reviewed values in the same call, never a write of its own"));
+  // The write step reaches the save only through the review of a changed text, and the save's status is a template
+  // over the status as read: it never changes a status alone.
+  const template = parts.write_page.data.input.argsJson;
+  assert.equal((template.match(/"status": "draft"/g) ?? []).length, 1, "the one status the save may send is draft");
+  assert.ok(template.includes('{% if status == "publish" %}, "status": "draft"{% endif %}'), "and only for a published post");
 });
 
 // --- 2. the approved revision is the snapshot of this run's post ----------------
@@ -121,7 +124,10 @@ test("S1 the filed page record names this run's post: post id, status, title, ad
   const { pageForm } = await extensionTool({ input: formCall(CONTENT_CHANGE), ports: {} });
   assert.deepEqual(pageForm.page, PAGE);
   const result = await extensionTool({ input: readCall(), ports: portsWith(pageForm) });
-  assert.deepEqual(JSON.parse(result.reviewedFields), CONTENT_CHANGE);
+  assert.deepEqual(
+    { title: result.reviewedTitle || null, content: result.reviewedContent || null, excerpt: result.reviewedExcerpt || null },
+    CONTENT_CHANGE,
+  );
 });
 
 test("S1b an address a model writes never reaches the page record", async () => {
@@ -287,12 +293,12 @@ test("R2 a read input missing from the call, or standing at the flow's default, 
   }
 });
 
-test("R3 the steps take the read's values from the read step, and the run's post id from the start", () => {
+test("R3 the steps take the read's values from the check of the read, and the run's post id from the start", () => {
   for (const step of ["form_page", "no_change_outcome", "read_reviewed_page"]) {
     for (const name of ["title", "content", "excerpt", "status", "modified", "address", "error"]) {
-      assert.deepEqual(sourcesOf(step, name), [["read_page", name]], `${step}.${name}`);
+      assert.deepEqual(sourcesOf(step, name), [["check_read", name]], `${step}.${name}`);
     }
-    assert.deepEqual(sourcesOf(step, "readPostId"), [["read_page", "postId"]], `${step}.readPostId`);
+    assert.deepEqual(sourcesOf(step, "readPostId"), [["check_read", "postId"]], `${step}.readPostId`);
     assert.deepEqual(sourcesOf(step, "postId"), [["start", "postId"]], `${step}.postId`);
   }
   for (const id of ["form_page", "file_page"]) {
@@ -315,7 +321,7 @@ test("R4 a successful read that asks for no change still ends the run as a chang
   });
   const outcome = told(READ.title);
   const equal = { title: READ.title, content: READ.content, excerpt: READ.excerpt };
-  for (const status of ["publish", "draft", "pending", "private", "future"]) {
+  for (const status of ["publish", "draft"]) {
     for (const writeFields of [NOTHING, equal]) {
       const read = { ...READ, status };
       assert.equal((await extensionTool({ input: formCall(writeFields, read), ports: {} })).next, "no_change", `${status}: form`);

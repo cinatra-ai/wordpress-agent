@@ -68,6 +68,12 @@ const titles = (list) => (list ?? []).map((entry) => entry.title);
 const sameWords = (a, b) => a.trim().split(/\s+/).join(" ") === b.trim().split(/\s+/).join(" ");
 
 const load = () => import("../cinatra/tools/reviewed-change.mjs");
+/** The values the read-back answers, as the three fields with null for a field that is not saved. */
+const fieldsOf = (result) => ({
+  title: result.reviewedTitle === "" ? null : result.reviewedTitle,
+  content: result.reviewedContent === "" ? null : result.reviewedContent,
+  excerpt: result.reviewedExcerpt === "" ? null : result.reviewedExcerpt,
+});
 
 /** The values the flow sends, each as JSON text. */
 const readInputs = (read = READ) => ({
@@ -142,8 +148,8 @@ const refusedWith = (code) => (err) =>
 test("T1 the flow derives the filed form by the tool, and reads the approved revision back by the tool", () => {
   const road = oas.nodes.map((n) => n.$component_ref);
   assert.deepEqual(road, [
-    "start", "read_page", "compose_change", "form_page", "route_change", "file_page", "gather_page_review",
-    "page_review_gate", "read_reviewed_page", "edit", "no_change_outcome", "emit_output", "end",
+    "start", "read_page", "check_read", "compose_change", "form_page", "route_change", "file_page", "gather_page_review",
+    "page_review_gate", "read_reviewed_page", "write_page", "write_outcome", "route_write", "no_change_outcome", "emit_output", "end",
   ]);
   for (const id of ["form_page", "read_reviewed_page"]) {
     const node = parts[id];
@@ -154,7 +160,7 @@ test("T1 the flow derives the filed form by the tool, and reads the approved rev
     assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
     assert.equal(node.metadata.cinatra.riskClass, "read_only");
     assert.equal("publishes" in node.metadata.cinatra, false);
-    for (const field of ["title", "content", "excerpt"]) assert.deepEqual(sourcesOf(id, field), [["read_page", field]]);
+    for (const field of ["title", "content", "excerpt"]) assert.deepEqual(sourcesOf(id, field), [["check_read", field]]);
   }
   assert.equal(parts.form_page.data.input.input.op, "form");
   assert.deepEqual(sourcesOf("form_page", "pageForm"), [["compose_change", "pageForm"]]);
@@ -164,12 +170,12 @@ test("T1 the flow derives the filed form by the tool, and reads the approved rev
   assert.deepEqual(sourcesOf("read_reviewed_page", "reviewAnswer"), [["page_review_gate", "pageReviewNote"]], "the revision read is the one the answer names");
   assert.deepEqual(sourcesOf("read_reviewed_page", "representationRevisionId"), [], "the filed revision is never the one read");
   assert.deepEqual(controlInto("read_reviewed_page"), ["page_review_gate"]);
-  assert.deepEqual(controlInto("edit"), ["read_reviewed_page"]);
-  assert.deepEqual(sourcesOf("edit", "reviewedFields"), [["read_reviewed_page", "reviewedFields"]]);
-  assert.deepEqual(sourcesOf("edit", "reviewedRevisionId"), [["read_reviewed_page", "reviewedRevisionId"]]);
+  assert.deepEqual(controlInto("write_page"), ["read_reviewed_page"]);
+  for (const name of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+    assert.deepEqual(sourcesOf("write_page", name), [["read_reviewed_page", name]]);
   assert.deepEqual(
     oas.data_flow_connections
-      .filter((e) => e.destination_node.$component_ref === "edit" && ["file_page", "compose_change", "form_page"].includes(e.source_node.$component_ref))
+      .filter((e) => e.destination_node.$component_ref === "write_page" && ["file_page", "compose_change", "form_page"].includes(e.source_node.$component_ref))
       .map((e) => e.destination_input),
     [],
     "no value reaches the write step from the filing or the compose step around the review",
@@ -222,7 +228,7 @@ test("T6 the approval of a successor revision reads and answers the successor's 
   const result = await extensionTool({ input: readCall(answer([{ artifactId: FILED.artifactId, representationRevisionId: SUCCESSOR }])), ports });
   assert.deepEqual(reads, [{ artifactId: FILED.artifactId, representationRevisionId: SUCCESSOR, objectType: PAGE_TYPE }]);
   assert.equal(result.reviewedRevisionId, SUCCESSOR);
-  assert.deepEqual(JSON.parse(result.reviewedFields), SUCCESSOR_FIELDS);
+  assert.deepEqual(fieldsOf(result), SUCCESSOR_FIELDS);
   assert.deepEqual([...touched].filter((k) => typeof k === "string"), ["artifacts"]);
 });
 
@@ -233,7 +239,7 @@ test("T7 the approval of the filed revision still answers its values", async () 
   const result = await extensionTool({ input: readCall(answer([FILED])), ports });
   assert.equal(reads.length, 1);
   assert.equal(result.reviewedRevisionId, FILED.representationRevisionId);
-  assert.deepEqual(JSON.parse(result.reviewedFields), FILED_FIELDS);
+  assert.deepEqual(fieldsOf(result), FILED_FIELDS);
 });
 
 test("T8 each refusal ends the run before the write, and the tool reaches no site", async () => {
@@ -271,17 +277,19 @@ test("T8 each refusal ends the run before the write, and the tool reaches no sit
   const site = ["wordpress_site_tool_write", "wordpress_site_tool_call", "ewpa/"];
   const source = readFileSync(join(root, MODULE), "utf8");
   for (const word of site) assert.equal(source.includes(word), false, `the tool never names ${word}`);
-  const writers = oas.nodes.map((n) => n.$component_ref).filter((id) => JSON.stringify(parts[id]).includes("wordpress_site_tool_write"));
-  assert.deepEqual(writers, ["edit"], "the write step, after the read, is the only step that names a site write");
+  const writers = oas.nodes.map((n) => n.$component_ref).filter((id) => JSON.stringify(parts[id].data ?? {}).includes("wordpress_site_tool_write"));
+  assert.deepEqual(writers, ["write_page"], "the write step, after the read, is the only step that names a site write");
 });
 
-test("T9 the write step takes the values only from the read, and keeps its checks", () => {
-  const { system, user } = parts.edit.data;
-  assert.ok(titles(parts.edit.inputs).includes("reviewedFields"));
-  for (const gone of ["reviewedPage", "reviewedTruncated", "artifactId", "representationRevisionId"])
-    assert.equal(titles(parts.edit.inputs).includes(gone), false, `the write step takes no ${gone}`);
-  assert.ok(user.includes("- reviewedFields: {{ reviewedFields }}"));
-  for (const code of ["post_changed", "page_editing_unsupported", "reviewed_change_unavailable"]) assert.ok(system.includes(code));
+test("T9 the write step takes the values only from the read-back, one input per value, and the reviewed revision", async () => {
+  for (const name of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+    assert.ok(titles(parts.write_page.inputs).includes(name), `the write step takes ${name}`);
+  for (const gone of ["reviewedFields", "reviewedPage", "reviewedTruncated", "artifactId", "representationRevisionId"])
+    assert.equal(titles(parts.write_page.inputs).includes(gone), false, `the write step takes no ${gone}`);
+  const { extensionTool } = await load();
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(await formOf(FILED_FIELDS)) });
+  const result = await extensionTool({ input: readCall(answer([FILED])), ports });
+  assert.deepEqual(result.reviewedSnapshot, [{ artifactId: FILED.artifactId, representationRevisionId: FILED.representationRevisionId }], "the card's list names the approved revision");
 });
 
 // --- only a changed field is saved ----------------------------------------------
@@ -294,7 +302,7 @@ test("T10 a change of the title alone saves the title alone, though the compose 
   assert.deepEqual(form.excerpts.map((e) => e.region), ["title"]);
   const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
   const result = await extensionTool({ input: readCall(answer([FILED])), ports });
-  assert.deepEqual(JSON.parse(result.reviewedFields), { title: composed.title, content: null, excerpt: null }, "the write step is handed the title alone");
+  assert.deepEqual(fieldsOf(result), { title: composed.title, content: null, excerpt: null }, "the write step is handed the title alone");
 });
 
 test("T11 a change of the content alone saves the content alone", async () => {
@@ -305,7 +313,7 @@ test("T11 a change of the content alone saves the content alone", async () => {
   assert.deepEqual(form.excerpts.map((e) => e.region), ["content"]);
   const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
   const result = await extensionTool({ input: readCall(answer([FILED])), ports });
-  assert.deepEqual(JSON.parse(result.reviewedFields), { title: null, content, excerpt: null });
+  assert.deepEqual(fieldsOf(result), { title: null, content, excerpt: null });
 });
 
 test("T12 the read-back refuses a revision that would save a field its excerpts do not show, also when that value equals the post as read", async () => {
@@ -316,9 +324,9 @@ test("T12 the read-back refuses a revision that would save a field its excerpts 
     const { ports } = portsAnswering({ [FILED.representationRevisionId]: extra });
     await assert.rejects(extensionTool({ input: readCall(answer([FILED])), ports }), refusedWith(READ_CODE), `an unchanged ${field}`);
   }
-  const edit = parts.edit.data.system;
-  assert.ok(edit.includes("never write a field whose `reviewedFields` member is null"), "the write step never sends a null member");
-  assert.ok(edit.includes("carrying exactly the `reviewedFields` members that are non-empty strings"), "the update carries only the returned values");
+  const template = parts.write_page.data.input.argsJson;
+  for (const [field, input] of [["title", "reviewedTitle"], ["content", "reviewedContent"], ["excerpt", "reviewedExcerpt"]])
+    assert.ok(template.includes(`{% if ${input} %}, "${field}": {{ ${input} | tojson }}{% endif %}`), `the save sends the ${field} only when the review saves it`);
 });
 
 // --- the work of the comparison is bounded --------------------------------------
@@ -376,7 +384,7 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   assert.deepEqual(edges.filter(([from]) => from === BRANCH), [[BRANCH, "default", "file_page"], [BRANCH, "no_change", NO_CHANGE]], "any other answer goes to the filing and the review");
   assert.deepEqual(edges.filter(([from]) => from === NO_CHANGE), [[NO_CHANGE, null, "emit_output"]]);
   assert.deepEqual(controlInto("file_page"), [BRANCH]);
-  assert.deepEqual(controlInto("emit_output").sort(), ["edit", NO_CHANGE]);
+  assert.deepEqual([...new Set(controlInto("emit_output"))].sort(), [NO_CHANGE, "route_write"]);
 
   const node = parts[NO_CHANGE];
   assert.equal(node.component_type, "ApiNode");
@@ -387,12 +395,12 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   assert.equal("publishes" in node.metadata.cinatra, false);
   for (const word of ["wordpress_site_tool", "ewpa/"]) assert.equal(JSON.stringify(node).includes(word), false, `the no-change step names no ${word}`);
   assert.deepEqual(sourcesOf(NO_CHANGE, "pageForm"), [["compose_change", "pageForm"]]);
-  for (const field of ["title", "content", "excerpt", "status", "modified", "address", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["read_page", field]]);
+  for (const field of ["title", "content", "excerpt", "status", "modified", "address", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["check_read", field]]);
   assert.deepEqual(sourcesOf(NO_CHANGE, "postId"), [["start", "postId"]]);
   assert.deepEqual(sourcesOf(NO_CHANGE, "instructions"), [["start", "instructions"]]);
   for (const input of ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"]) {
-    assert.deepEqual(sourcesOf("emit_output", input), [["edit", input], [NO_CHANGE, input]], `the output's ${input} comes from the one step that ran`);
-    assert.deepEqual(sourcesOf("end", input), [["edit", input], [NO_CHANGE, input]], `the end's ${input} comes from the one step that ran`);
+    assert.deepEqual(sourcesOf("emit_output", input).sort(), [[NO_CHANGE, input], ["write_outcome", input]], `the output's ${input} comes from the one step that ran`);
+    assert.deepEqual(sourcesOf("end", input).sort(), [[NO_CHANGE, input], ["write_outcome", input]], `the end's ${input} comes from the one step that ran`);
   }
 
   const { extensionTool } = await load();
@@ -515,7 +523,7 @@ test("T18 a block that holds an invisible character or a no-break space is kept 
   assert.equal(form.writeFields.content, after, "an edit of another block is filed");
   const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
   const result = await extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(content) }, ports });
-  assert.deepEqual(JSON.parse(result.reviewedFields), withContent(after), "and read back");
+  assert.deepEqual(fieldsOf(result), withContent(after), "and read back");
   const refused = {
     "words changed on both sides of a zero-width space": [content.replace("Ask at the desk\u200B.", "Please ask at the front desk\u200B. Thank you."), "U+200B"],
     "removing a zero-width space": [content.replace("desk\u200B.", "desk."), "U+200B"],
@@ -569,7 +577,7 @@ test("T20 white space is compared byte for byte: only a single space between vis
     assert.equal(form.writeFields.content, after, name);
     const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
     const result = await extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(before) }, ports });
-    assert.deepEqual(JSON.parse(result.reviewedFields), withContent(after), `${name}, at the read-back`);
+    assert.deepEqual(fieldsOf(result), withContent(after), `${name}, at the read-back`);
   }
   assert.equal((await formOf({ title: null, content: null, excerpt: "Our opening hours." })).excerpts.length, 1, "an excerpt edit with single spaces is filed");
   await assert.rejects(

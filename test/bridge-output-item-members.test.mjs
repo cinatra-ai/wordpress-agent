@@ -5,18 +5,13 @@
 // carries nothing inside it and structured consumers get unfielded entries.
 // Issue #43 named two outputs of this pack measured that way at the flow this
 // pack shipped at 5caf24d4 — `changes` and `error` on the `edit` bridge node.
-//
-// Both are declared at this head, from the shapes this pack's OWN system prompt
-// already spells out to the model (Step 4 of `edit`'s system instructions and
-// its user message): a change entry is `{ field, before, after }`, and the
-// error object is `{ code, message }`. This suite holds that closed: it mirrors
+// Since cinatra#3745 no model reads or writes the site: the write's `changes`
+// and `error` are built by code, and the one bridge node left is
+// `compose_change`. This suite holds every bridge output closed: it mirrors
 // the host loader's own derivation pass (`_declared_members` /
 // `_declared_items` / `_output_property_json_schema`, both agentspec spellings,
 // the branch keywords and the array-without-items case) and asserts the pass
 // reports nothing free-form anywhere in this flow.
-//
-// Every assertion below fails on the flow this pack shipped at 5caf24d4 and
-// passes here.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -167,30 +162,18 @@ test("no bridge output of this flow leaves a level without declared members", ()
   );
 });
 
-test("`changes` declares the entry members the editor's own instructions promise", () => {
-  // `changes` was the free-form list of #43 (the flow at 5caf24d4, oas.json:436):
-  // an `items` object with no `properties`. The members below are the ones the
-  // `edit` node's own system prompt and user message spell out to the model.
-  const changes = output("edit", "changes");
-  assert.ok(changes, "the flow carries the `edit` bridge node's `changes` output");
-  assert.equal(changes.type, "array");
-  const items = changes.json_schema.items;
-  assert.deepEqual(Object.keys(items.properties).sort(), ["after", "before", "field"]);
-  for (const name of ["after", "before", "field"])
-    assert.deepEqual(items.properties[name], { type: "string" }, `${name} is a string`);
-  assert.deepEqual(freeFormLevels(changes), []);
-});
-
-test("`error` declares the members every error result of Step 4 carries", () => {
-  // `error` was the free-form object of #43 (the flow at 5caf24d4, oas.json:445):
-  // a bare object with no `properties`. ERROR RESULT and RECONCILIATION FAILURE
-  // in the node's own Step 4 both carry exactly `code` and `message`.
-  const error = output("edit", "error");
-  assert.ok(error, "the flow carries the `edit` bridge node's `error` output");
+test("the one model step declares the members of its error and of the values to save", () => {
+  // cinatra#3745: the read and the write no longer run on the model bridge, so
+  // `changes` and the write's `error` are built by code (write_outcome). The
+  // one bridge node left, `compose_change`, declares its `error` as
+  // `{ code, message }` and its `pageForm.writeFields` as the three values.
+  assert.deepEqual(nodes.map((node) => node.id), ["compose_change"]);
+  const error = output("compose_change", "error");
   assert.equal(error.type, "object");
-  const members = error.json_schema.properties;
-  assert.deepEqual(Object.keys(members).sort(), ["code", "message"]);
+  assert.deepEqual(Object.keys(error.json_schema.properties).sort(), ["code", "message"]);
   for (const name of ["code", "message"])
-    assert.deepEqual(members[name], { type: "string" }, `${name} is a string`);
+    assert.deepEqual(error.json_schema.properties[name], { type: "string" }, `${name} is a string`);
+  const form = output("compose_change", "pageForm");
+  assert.deepEqual(Object.keys(form.json_schema.properties.writeFields.properties).sort(), ["content", "excerpt", "title"]);
   assert.deepEqual(freeFormLevels(error), []);
 });

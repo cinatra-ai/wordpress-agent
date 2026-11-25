@@ -2,7 +2,7 @@
 // with the published and the proposed words, the application reviews it, and
 // the write step follows the review.
 //
-// Nine arms: S1 the flow's one road; S2 the read step; S3 the compose step, the
+// Nine arms: S1 the flow's one road; S2 the read step and its check; S3 the compose step, the
 // form it answers and the form the tool derives from it; S4 the filing step and the package manifest; S5 the
 // review step and the step that names the filed snapshot to it; S6 the write
 // step; S7 the declared module; S8 the end node; S9 the read of the reviewed
@@ -30,6 +30,7 @@ const EXAMPLE_END = "END EXAMPLE FORM";
 const ROAD = [
   "start",
   "read_page",
+  "check_read",
   "compose_change",
   "form_page",
   "route_change",
@@ -37,15 +38,23 @@ const ROAD = [
   "gather_page_review",
   "page_review_gate",
   "read_reviewed_page",
-  "edit",
+  "write_page",
+  "write_outcome",
+  "route_write",
   "no_change_outcome",
   "emit_output",
   "end",
 ];
 // The one road with a change, and the road of a request that changes nothing.
-const REVIEW_ROAD = ROAD.filter((id) => id !== "no_change_outcome");
+const REVIEW_ROAD = ROAD.filter((id) => id !== "no_change_outcome" && id !== "route_write");
+const WRITE_ENDS = ["written", "site_policy_conflict", "permission_unverified", "post_locked", "unsupported_status", "invalid", "not_found", "unsupported_storage", "db_error", "default"];
 const CONTROL_EDGES = [
-  ...REVIEW_ROAD.slice(0, -1).map((id, index) => [id, id === "route_change" ? "default" : null, REVIEW_ROAD[index + 1]]),
+  ...REVIEW_ROAD.slice(0, -1)
+    .filter((id) => id !== "write_outcome")
+    .map((id, index) => [id, id === "route_change" ? "default" : null, REVIEW_ROAD[REVIEW_ROAD.indexOf(id) + 1]]),
+  ["write_outcome", null, "route_write"],
+  ...WRITE_ENDS.map((branch) => ["route_write", branch, "emit_output"]),
+  ["route_write", "post_changed", "read_page"],
   ["route_change", "no_change", "no_change_outcome"],
   ["no_change_outcome", null, "emit_output"],
 ];
@@ -80,8 +89,8 @@ const assertBridgeNode = (id) => {
   assert.equal(node.component_type, "ApiNode");
   assert.ok(node.url.endsWith(LLM_BRIDGE_PATH), `${id} is a bridge step`);
   assert.equal(node.http_method, "POST");
-  assert.equal(node.data.agent_id, parts.edit.data.agent_id);
-  assert.deepEqual(node.data.cinatra_llm, parts.edit.data.cinatra_llm);
+  assert.equal(node.data.agent_id, "wordpress-content-editor");
+  assert.deepEqual(node.data.cinatra_llm, { preferredProvider: "openai", preferredModel: "gpt-5.5" });
   assert.equal(node.data.agent_run_id, "{{ agent_run_id }}");
   assert.ok(titles(node.inputs).includes("agent_run_id"), `${id} declares agent_run_id`);
   assert.equal(node.metadata.cinatra.riskClass, "read_only");
@@ -255,45 +264,35 @@ test("S1: the flow runs one road from the read through the review to the write",
   assert.deepEqual(
     oas.nodes.map((n) => n.$component_ref),
     ROAD,
-    "the thirteen steps, in this order",
+    "the sixteen steps, in this order",
   );
   for (const id of ROAD) assert.ok(parts[id], `the step ${id} is defined`);
   const edges = oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.from_branch ?? null, e.to_node.$component_ref]);
   assert.deepEqual(
     [...edges].sort(),
     [...CONTROL_EDGES].sort(),
-    "the one road with a change, and one branch that takes a change of nothing past the filing and the review to the output",
+    "the one road with a change, one branch that takes a change of nothing past the filing and the review to the output, and the branches of the site's answer",
   );
-  assert.ok(ROAD.indexOf("edit") > ROAD.indexOf(GATE), "the write step comes after the review");
+  assert.ok(ROAD.indexOf("write_page") > ROAD.indexOf(GATE), "the write step comes after the review");
 });
 
-test("S2: the read step reads the page and writes nothing", () => {
-  const node = assertBridgeNode("read_page");
-  assert.equal("toolbox_ids" in node.data, false, "the read step keeps the default tool offer");
-  const system = node.data.system;
-  for (const word of ["ewpa/get-post", "ewpa/get-page", "wordpress_site_tool_call"])
-    assert.ok(system.includes(word), `the read step names ${word}`);
-  for (const word of ["ewpa/update-post", "ewpa/create-post"])
-    assert.equal(system.includes(word), false, `the read step never names ${word}`);
-  assert.deepEqual(titles(node.outputs), [
-    "postId",
-    "instanceId",
-    "postType",
-    "title",
-    "content",
-    "excerpt",
-    "status",
-    "address",
-    "modified",
-    "error",
-  ]);
-  for (const title of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified"])
-    assert.equal(find(node.outputs, title).type, "string", `${title} is a string`);
-  const error = find(node.outputs, "error");
-  assert.equal(error.type, "object");
-  assert.deepEqual(Object.keys(members(error)).sort(), ["code", "message"]);
-  for (const input of ["instanceId", "postId", "postType"]) assertEdgeFrom("read_page", input, "start");
+test("S2: the read step reads the page and writes nothing, and its check hands the read on", () => {
+  const node = parts.read_page;
+  assert.equal(node.component_type, "ApiNode");
+  assert.ok(node.url.endsWith("/api/agents/passthrough"), "the read runs without a model");
+  assert.equal(node.data.tool, "wordpress_site_tool_call");
+  assert.equal(node.data.input.toolName, "cinatra/post-read");
+  assert.equal(node.metadata.cinatra.riskClass, "read_only");
+  for (const word of ["ewpa/update-post", "ewpa/create-post", "wordpress_site_tool_write", "cinatra/post-update-if-unchanged"])
+    assert.equal(JSON.stringify(node.data).includes(word), false, `the read step never names ${word}`);
+  for (const input of ["instanceId", "postId"]) assertEdgeFrom("read_page", input, "start");
   assertEdgeFrom("read_page", "agent_run_id", "start", "cinatra_run_id");
+  const check = parts.check_read;
+  assert.deepEqual(titles(check.outputs), ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "rowToken", "error", "ok"]);
+  for (const title of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "rowToken"])
+    assert.equal(find(check.outputs, title).type, "string", `${title} is a string`);
+  assert.deepEqual(Object.keys(members(find(check.outputs, "error"))).sort(), ["code", "message"]);
+  assert.equal(check.data.input.input.op, "page");
 });
 
 test("S3: the compose step answers the values to save, and the filed form shows each saved change as it is saved", async () => {
@@ -320,7 +319,8 @@ test("S3: the compose step answers the values to save, and the filed form shows 
   );
 
   assertEdgeFrom("compose_change", "instructions", "start");
-  for (const output of titles(parts.read_page.outputs)) assertEdgeFrom("compose_change", output, "read_page");
+  for (const output of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "error"])
+    assertEdgeFrom("compose_change", output, "check_read");
 
   const system = node.data.system;
   const begin = system.indexOf(EXAMPLE_BEGIN);
@@ -453,7 +453,7 @@ test("S4: the filing step files the page snapshot, and the manifest declares wha
     "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",
   );
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
-  assertEdgeFrom("file_page", "pageTitle", "read_page", "title");
+  assertEdgeFrom("file_page", "pageTitle", "check_read", "title");
   assert.equal(edgesInto("file_page", "pageTitle").length, 1, "the filed title has one source, the read step");
   assertEdgeFrom("file_page", "pageForm", "form_page");
   assertEdgeFrom("form_page", "pageForm", "compose_change");
@@ -501,7 +501,7 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
   assert.equal(gate.component_type, "InputMessageNode");
   assert.equal(find(gate.inputs, "reviewTargets")?.type, "string");
   assert.ok(find(gate.inputs, "pageTitle"), "the review step declares pageTitle");
-  assertEdgeFrom(GATE, "pageTitle", "read_page", "title");
+  assertEdgeFrom(GATE, "pageTitle", "check_read", "title");
   assert.equal(edgesInto(GATE, "pageTitle").length, 1, "the title the review shows has one source, the read step");
   assert.deepEqual(titles(gate.outputs), ["pageReviewNote"]);
   assert.equal(gate.metadata.cinatra.a2uiSurfaceId, "wordpress-agent:page-review");
@@ -539,36 +539,26 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
 });
 
 test("S6: the write step follows the review and saves only the reviewed page snapshot's values", () => {
-  const node = parts.edit;
-  assert.ok(node, "the write step keeps its id");
+  const node = parts.write_page;
+  assert.ok(node, "the flow carries the write step");
   assert.deepEqual(
-    controlInto("edit").map((e) => e.from_node.$component_ref),
+    controlInto("write_page").map((e) => e.from_node.$component_ref),
     ["read_reviewed_page"],
     "the only control edge into the write step comes from the read of the reviewed revision",
   );
-  assertEdgeFrom("edit", "reviewedFields", "read_reviewed_page");
-  assertEdgeFrom("edit", "reviewedRevisionId", "read_reviewed_page");
-  for (const gone of ["artifactId", "representationRevisionId", "reviewedPage", "reviewedTruncated"])
+  for (const input of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+    assertEdgeFrom("write_page", input, "read_reviewed_page");
+  for (const gone of ["artifactId", "representationRevisionId", "reviewedPage", "reviewedTruncated", "proposedFields", "instructions"])
     assert.equal(find(node.inputs, gone), undefined, `the write step takes no ${gone}`);
-  assert.equal(find(node.inputs, "proposedFields"), undefined, "the write step takes no value the compose step answered");
   assert.deepEqual(
     oas.data_flow_connections
-      .filter((e) => e.destination_node.$component_ref === "edit" && e.source_node.$component_ref === "compose_change")
+      .filter((e) => e.destination_node.$component_ref === "write_page" && e.source_node.$component_ref === "compose_change")
       .map((e) => e.destination_input),
     [],
     "no edge carries a value from the compose step to the write step around the review",
   );
-  assert.ok(node.data.system.includes("ewpa/update-post"), "the write step names ewpa/update-post");
-  const step1 = node.data.system.split("**STEP 1")[1]?.split("**STEP 2")[0] ?? "";
-  assert.match(step1, /the read step hands you its values/, "Step 1 takes the post the read step read");
-  assert.match(step1, /If `status` is empty/, "a failed read is told by an empty status");
-  assert.doesNotMatch(step1, /If `content` is empty/, "an empty body is never a failed read");
-  assert.match(step1, /`reviewedRevisionId` is not empty/, "the read names the revision it read");
-  assert.match(step1, /make NO WordPress call at all and return the STOPPED RESULT with `code: "reviewed_change_unavailable"`/, "no reviewed change, no write");
-  const step2 = node.data.system.split("**STEP 2")[1]?.split("**STEP 3")[0] ?? "";
-  assert.match(step2, /exactly the `reviewedFields` members that are non-empty strings, each byte for byte \(Rule 4\), and no other field/, "the write takes the reviewed writeFields");
-  assert.match(node.data.system, /never take a value from `instructions` or from anything else/, "the request is not a source of a written value");
-  assert.deepEqual(titles(node.outputs), RUN_OUTPUTS, "the write step keeps its six outputs");
+  assert.equal(node.data.input.toolName, "cinatra/post-update-if-unchanged");
+  assert.equal(JSON.stringify(node.data).includes("ewpa/update-post"), false, "the write step no longer names the unconditional update");
 });
 
 test("S9: the approved revision is read back after the review, by the revision id the review's answer names", () => {
@@ -589,9 +579,9 @@ test("S9: the approved revision is read back after the review, by the revision i
   assertEdgeFrom("read_reviewed_page", "artifactId", "file_page");
   assertEdgeFrom("read_reviewed_page", "reviewAnswer", GATE, "pageReviewNote");
   assertEdgeFrom("read_reviewed_page", "cinatra_run_id", "start");
-  for (const field of ["title", "content", "excerpt"]) assertEdgeFrom("read_reviewed_page", field, "read_page");
+  for (const field of ["title", "content", "excerpt"]) assertEdgeFrom("read_reviewed_page", field, "check_read");
   assert.equal(edgeInto("read_reviewed_page", "representationRevisionId"), undefined, "the filed revision is never the one read");
-  assert.deepEqual(titles(node.outputs), ["reviewedFields", "reviewedRevisionId", "ok"]);
+  assert.deepEqual(titles(node.outputs), ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot", "ok"]);
   assert.deepEqual(
     controlInto("read_reviewed_page").map((e) => e.from_node.$component_ref),
     [GATE],
@@ -664,7 +654,12 @@ test("S8: the page snapshot is filed during the run, and the end node binds no a
     "no flow output carries a binding",
   );
   for (const output of RUN_OUTPUTS) {
-    assertEdgeFrom("end", output, "edit");
-    assertEdgeFrom("emit_output", output, "edit");
+    for (const node of ["end", "emit_output"]) {
+      assert.deepEqual(
+        edgesInto(node, output).map((e) => e.source_node.$component_ref).sort(),
+        ["no_change_outcome", "write_outcome"],
+        `${node}.${output} comes from the outcome of the write or of a change of nothing`,
+      );
+    }
   }
 });

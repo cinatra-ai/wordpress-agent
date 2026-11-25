@@ -9,7 +9,8 @@
 // post, that nothing was reviewed or written, and that repeats the request,
 // flattened to one line and bounded. The request reaches the step by a data
 // edge from the flow's start, and the message reaches the flow's output
-// message and its end. The write step's road leaves it empty.
+// message and its end. On the write road, `write_outcome` hands its own
+// message (built by code from the site's answer).
 //
 // Zero-dependency; runs on plain node:test (`node --test`).
 
@@ -104,18 +105,18 @@ test("N3 the message never claims that something was written, saved or published
   assert.doesNotMatch(fixed.replace("nothing was reviewed or written", ""), /\b(written|saved|published|updated|changed|demoted)\b/i);
 });
 
-test("N4 the step takes the request from the start and hands its message to the output message and the end; the write road leaves it empty", () => {
+test("N4 the step takes the request from the start and hands its message to the output message and the end; the write road hands its own", () => {
   const node = parts[STEP];
   assert.ok(node.inputs.some((i) => i.title === "instructions" && i.type === "string"), "the step declares the request");
   assert.deepEqual(sourcesOf(STEP, "instructions"), [["start", "instructions"]]);
   assert.match(node.data.input.input.instructions, /\{\{ instructions \| tojson \}\}/);
-  assert.deepEqual(sourcesOf(STEP, "title"), [["read_page", "title"]]);
+  assert.deepEqual(sourcesOf(STEP, "title"), [["check_read", "title"]]);
   assert.deepEqual(sourcesOf(STEP, "postId"), [["start", "postId"]]);
   assert.ok(node.outputs.some((o) => o.title === "message" && o.type === "string"), "the step answers a message");
-  assert.deepEqual(sourcesOf("emit_output", "message"), [[STEP, "message"]]);
-  assert.deepEqual(sourcesOf("end", "message"), [[STEP, "message"]]);
+  assert.deepEqual(sourcesOf("emit_output", "message").sort(), [[STEP, "message"], ["write_outcome", "message"]]);
+  assert.deepEqual(sourcesOf("end", "message").sort(), [[STEP, "message"], ["write_outcome", "message"]]);
   const emitInput = parts.emit_output.inputs.find((i) => i.title === "message");
-  assert.equal(emitInput?.default, "", "the write road leaves the message empty");
+  assert.equal(emitInput?.default, "", "a road whose step answers no message leaves it empty");
   assert.equal(parts.end.outputs.find((o) => o.title === "message")?.default, "");
   assert.ok(oas.outputs.some((o) => o.title === "message" && o.type === "string"), "the flow declares the message");
   assert.match(parts.emit_output.message, /\{\{ message \}\}/, "the scanner sees the plain reference");

@@ -2,8 +2,11 @@
  * THE REVIEWED CHANGE: the page snapshot form the review shows, and the values
  * read back from the revision the review approved.
  *
- * Two operations, one per step of the flow:
+ * Five operations, one per step of the flow:
  *
+ * - `page` (step `check_read`, right after the model-free read of the site
+ *   ability `cinatra/post-read`): it takes the site's answer only when it is a
+ *   successful read of the run's post and hands its values on; see `page`.
  * - `form` (step `form_page`, in front of the filing). The compose step answers
  *   the values to save (`writeFields`: the complete new `title`, `content` and
  *   `excerpt`, each a non-empty string or null). A value that equals the post
@@ -30,7 +33,12 @@
  *   it). It reads that revision through the host's artifact read port by its
  *   revision id, derives the excerpts again from its `writeFields` and the post
  *   as read, and answers the values only when they equal the excerpts the
- *   revision shows and every value it would save is shown by them.
+ *   revision shows and every value it would save is shown by them. It answers
+ *   each value as its own text (empty when not saved) and the approved
+ *   revision, which the publishing step takes one by one.
+ * - `outcome` (step `write_outcome`, after the publishing step): it reads the
+ *   site's answer to `cinatra/post-update-if-unchanged` and answers the branch
+ *   the flow takes and the run's output; see `outcome`.
  *
  * Every operation takes the read only when it is a successful read
  * (`checkedRead`); any other read is refused and never ends the run as a
@@ -43,14 +51,35 @@
  *
  * Each operation refuses by the host's documented means: it throws an error
  * named `ExtensionToolCallRefusal` whose message is one sentence that starts
- * with its code (`page_form_unavailable` for `form` and `unchanged`,
- * `reviewed_change_unavailable` for `read`). The step and the run fail, so the
- * write step never runs. It reads no port but the artifact read, and writes no
+ * with its code (`post_read_unavailable` for `page`, `page_form_unavailable`
+ * for `form` and `unchanged`, `reviewed_change_unavailable` for `read`,
+ * `write_answer_unreadable` for `outcome`). The step and the run fail; before
+ * the write, the write step never runs. It reads no port but the artifact read, and writes no
  * port, no table and no artifact.
  */
 
 export const FORM_CODE = "page_form_unavailable";
 export const READ_CODE = "reviewed_change_unavailable";
+export const PAGE_CODE = "post_read_unavailable";
+export const OUTCOME_CODE = "write_answer_unreadable";
+
+/**
+ * The refusal codes of the site ability `cinatra/post-update-if-unchanged`
+ * other than `post_changed`, each with the plain message the run ends with.
+ * After each of them nothing was written.
+ */
+export const WRITE_REFUSALS = {
+  site_policy_conflict:
+    "Nothing was written: the site's own save rules would also change another part of the post or its status. A person makes this change on the site.",
+  permission_unverified:
+    "Nothing was written: the site could not verify that this account may edit the post. Check the site's caching and permission plugins, then start a new run.",
+  post_locked: "Nothing was written: another user is editing the post on the site. Start a new run when they are done.",
+  unsupported_status: "Nothing was written: the post is no longer published or a draft, and this agent edits only published posts and drafts.",
+  invalid: "Nothing was written: the site refused the request as malformed. This is a fault of the agent; report it.",
+  not_found: "Nothing was written: the post no longer exists, or this account may no longer edit it.",
+  unsupported_storage: "Nothing was written: the site's database cannot lock a post row (the posts table does not use InnoDB).",
+  db_error: "Nothing was written: the site's database refused the save. Start a new run later.",
+};
 
 /** The type of the page snapshot the flow files. */
 const PAGE_TYPE = "@cinatra-ai/website-artifacts:page-snapshot";
@@ -93,10 +122,18 @@ const SENTENCE_MAX = 400;
 
 const FIELDS = ["title", "content", "excerpt"];
 
+/** How a refusal sentence of each code starts and ends. */
+const REFUSAL_WORDS = {
+  [FORM_CODE]: ["nothing was filed", "start a new run"],
+  [READ_CODE]: ["nothing was written", "start a new run"],
+  [PAGE_CODE]: ["nothing was proposed", "start a new run"],
+  [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
+};
+
 class Refusal extends Error {
   constructor(code, cause) {
-    const start = code === FORM_CODE ? "nothing was filed" : "nothing was written";
-    const line = `${code}: ${start}, because ${cause}; start a new run.`.replace(/\s+/g, " ").trim();
+    const [start, end] = REFUSAL_WORDS[code];
+    const line = `${code}: ${start}, because ${cause}; ${end}.`.replace(/\s+/g, " ").trim();
     super(line.length <= SENTENCE_MAX ? line : `${line.slice(0, SENTENCE_MAX - 1).trimEnd()}…`);
     this.name = REFUSAL_NAME;
   }
@@ -475,8 +512,8 @@ const nothingChanges = (writeFields) => FIELDS.every((field) => writeFields[fiel
 
 // --- the read ----------------------------------------------------------------
 
-/** The statuses of a post this flow edits; a successful read answers one of them. */
-const READ_STATUSES = new Set(["publish", "draft", "pending", "private", "future"]);
+/** The statuses of a post this flow edits (the site ability writes only these); a successful read answers one of them. */
+const READ_STATUSES = new Set(["publish", "draft"]);
 
 /** A text input as the flow renders it (JSON text of a string), or undefined when it is not one. */
 function textInput(value) {
@@ -489,8 +526,8 @@ function textInput(value) {
  * THE READ, accepted only when it is a successful read. A successful read
  * always carries: an error object whose `code` and `message` are both the
  * empty text (the read step's contract for a successful read); a status this
- * flow edits (`publish`, `draft`, `pending`, `private` or `future`; a trashed
- * post, an automatic draft, a revision and any other text are refused); a
+ * flow edits (`publish` or `draft`, the two the site ability writes; any
+ * other status and any other text are refused); a
  * non-empty change time; a title, a content, an excerpt and an address that
  * are texts (each may be empty); and the run's post id, a whole number, which
  * the read step answered too. Anything else is a failed read, whatever its
@@ -762,13 +799,181 @@ async function read(call, ports) {
   if (shown(derived) !== shown(snapshot.excerpts)) {
     refuse("the values to save in the reviewed revision differ from the excerpts it shows");
   }
-  return { ok: true, reviewedFields: JSON.stringify(writeFields), reviewedRevisionId: revisionId };
+  return {
+    ok: true,
+    reviewedTitle: writeFields.title ?? "",
+    reviewedContent: writeFields.content ?? "",
+    reviewedExcerpt: writeFields.excerpt ?? "",
+    reviewedRevisionId: revisionId,
+    reviewedSnapshot: [{ artifactId, representationRevisionId: revisionId }],
+  };
+}
+
+// --- page: the check of the site's read --------------------------------------
+
+/** A value the flow renders with `tojson`, read back; the value itself when it is not JSON text. */
+function jsonValue(value) {
+  if (typeof value !== "string") return value;
+  const parsed = parseJson(value);
+  return parsed === undefined ? value : parsed;
+}
+
+/** The post types the site ability reads and writes. */
+const POST_TYPES = new Set(["post", "page"]);
+/** The run's type hints this flow accepts; the type itself comes from the read. */
+const TYPE_HINTS = new Set(["", "post", "page"]);
+/** The form of the site's change time and of its row token. */
+const MODIFIED_FORM = /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/;
+const ROW_TOKEN_FORM = /^[0-9a-f]{64}$/;
+/** The form of a code or a column name the site answers; any other text is not repeated. */
+const NAME_FORM = /^[a-z][a-z0-9_]{0,39}$/;
+
+/**
+ * THE CHECK OF THE READ (step `check_read`, right after the model-free read of
+ * `cinatra/post-read`). It takes the site's answer only when it is a
+ * successful read of the run's post: `success` exactly true, the run's post id
+ * (a whole number) as the answered `post_id`, a post or a page, a status the
+ * site ability writes (`publish` or `draft`), a change time and a row token of
+ * the site's form, and a title, a content, an excerpt and an address that are
+ * texts. It hands those values on, unchanged, under the names the later steps
+ * read, with an empty error. Anything else is refused: the run fails before
+ * the model step, and nothing is proposed, filed or written. A refusal names
+ * the site's refusal code when it has the form of one, and never repeats the
+ * site's text.
+ */
+function page(call) {
+  const refuse = (cause) => {
+    throw new Refusal(PAGE_CODE, cause);
+  };
+  if (jsonValue(call.success) !== true) {
+    const code = jsonValue(call.code);
+    refuse(typeof code === "string" && NAME_FORM.test(code) ? `the site refused the read (${code})` : "the site answered no successful read of the post");
+  }
+  const postId = (textInput(call.postId) ?? "").trim();
+  if (!/^[1-9][0-9]*$/.test(postId)) refuse("the run names no post id that is a whole number");
+  const answered = jsonValue(call.post_id);
+  if (!Number.isInteger(answered) || String(answered) !== postId) refuse("the site answered another post than the run's post");
+  const hint = (textInput(call.postType) ?? "").trim();
+  if (!TYPE_HINTS.has(hint)) refuse("the run asks for a post type other than post or page");
+  const values = {};
+  for (const name of ["post_type", "post_status", "post_modified_gmt", "row_token", "post_title", "post_content", "post_excerpt", "permalink"]) {
+    values[name] = jsonValue(call[name]);
+    if (typeof values[name] !== "string") refuse(`the site's read answered no ${name.replace("post_", "")} text`);
+  }
+  if (!POST_TYPES.has(values.post_type)) refuse("the post is neither a post nor a page");
+  if (!READ_STATUSES.has(values.post_status)) refuse("the post is neither published nor a draft, and the site writes only those");
+  if (!MODIFIED_FORM.test(values.post_modified_gmt)) refuse("the site's read answered no change time");
+  if (!ROW_TOKEN_FORM.test(values.row_token)) refuse("the site's read answered no row token");
+  return {
+    ok: true,
+    postId,
+    instanceId: readText(call.instanceId).trim(),
+    postType: values.post_type,
+    title: values.post_title,
+    content: values.post_content,
+    excerpt: values.post_excerpt,
+    status: values.post_status,
+    address: values.permalink.trim(),
+    modified: values.post_modified_gmt,
+    rowToken: values.row_token,
+    error: { code: "", message: "" },
+  };
+}
+
+// --- outcome: the site's answer to the write ---------------------------------
+
+/** The site's column names and the field names of the run's changes. */
+const COLUMN_FIELDS = { post_title: "title", post_content: "content", post_excerpt: "excerpt", post_status: "status", post_modified_gmt: "change time", row_token: "row" };
+
+/** The changed parts the site names, as field names, in the site's order; names of another form are left out. */
+function changedParts(data) {
+  const list = isPlainObject(data) && Array.isArray(data.changed) ? data.changed : [];
+  const names = list.filter((name) => typeof name === "string" && NAME_FORM.test(name)).slice(0, 20);
+  return [...new Set(names.map((name) => COLUMN_FIELDS[name] ?? name.replace(/^post_/, "")))];
+}
+
+/**
+ * THE OUTCOME OF THE WRITE (step `write_outcome`, right after the publishing
+ * step). It reads the site's answer to `cinatra/post-update-if-unchanged` and
+ * answers `next`, the branch the flow takes, with the run's output, all built
+ * here, never by a model:
+ *
+ * - `written` for `success` exactly true with the run's post id and the stored
+ *   title, content, excerpt and status as texts. `changes` names each field the
+ *   reviewed revision saves, with the value as read before and the value the
+ *   site stored after (the site's save filters can change it; `message` then
+ *   names the fields), and the status when it changed. `proposalId` is
+ *   `wp-<post id>-<reviewed revision id>`.
+ * - `post_changed`: nothing was written, because the post changed on the site
+ *   after the read. The flow goes back to the read; `reviewNotice` tells the
+ *   person on the next review that the change was proposed again against the
+ *   current post, naming the changed parts the site named.
+ * - each other refusal code of the ability (`WRITE_REFUSALS`): nothing was
+ *   written; the run ends completed with `error` and its plain message.
+ *
+ * Any other answer is refused (`write_answer_unreadable`): the run fails and
+ * tells the person to check the post on the site, because the save's outcome
+ * is not known. The site's own text is never repeated.
+ */
+function outcome(call) {
+  const refuse = (cause) => {
+    throw new Refusal(OUTCOME_CODE, cause);
+  };
+  const postId = (textInput(call.postId) ?? "").trim();
+  const instanceId = readText(call.instanceId).trim();
+  const base = { ok: true, postId, instanceId, proposalId: "", changeSetId: "", changes: [], error: {}, message: "", reviewNotice: "" };
+  const success = jsonValue(call.success);
+  const code = jsonValue(call.code);
+  const data = jsonValue(call.data);
+  if (success === false && code === "post_changed") {
+    const parts = changedParts(data);
+    const named = parts.length > 0 ? ` (changed: ${parts.join(", ")})` : "";
+    return {
+      ...base,
+      next: "post_changed",
+      reviewNotice:
+        `Nothing was written: the post changed on the site after it was read${named}. ` +
+        "The change was proposed again against the current post; review it again.",
+    };
+  }
+  if (success === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(WRITE_REFUSALS, code)) {
+    const message = WRITE_REFUSALS[code];
+    return { ...base, next: code, error: { code, message }, message };
+  }
+  if (success !== true) refuse("the site's answer is neither a save nor a refusal this agent knows");
+  if (!/^[1-9][0-9]*$/.test(postId) || jsonValue(call.post_id) !== Number(postId)) refuse("the site's answer names another post than the run's post");
+  const stored = {};
+  for (const [field, column] of [["title", "post_title"], ["content", "post_content"], ["excerpt", "post_excerpt"], ["status", "post_status"]]) {
+    stored[field] = jsonValue(call[column]);
+    if (typeof stored[field] !== "string") refuse(`the site's answer to the save carries no stored ${field}`);
+  }
+  const revisionId = readText(call.reviewedRevisionId).trim();
+  if (revisionId === "") refuse("the run names no reviewed revision");
+  const changes = [];
+  for (const [field, input] of [["title", "reviewedTitle"], ["content", "reviewedContent"], ["excerpt", "reviewedExcerpt"]]) {
+    if ((textInput(call[input]) ?? "") === "") continue;
+    changes.push({ field, before: textInput(call[field]) ?? "", after: stored[field] });
+  }
+  const statusBefore = textInput(call.status) ?? "";
+  if (stored.status !== statusBefore) changes.push({ field: "status", before: statusBefore, after: stored.status });
+  const sanitized = (Array.isArray(jsonValue(call.sanitized_fields)) ? jsonValue(call.sanitized_fields) : [])
+    .filter((name) => typeof name === "string" && Object.prototype.hasOwnProperty.call(COLUMN_FIELDS, name))
+    .map((name) => COLUMN_FIELDS[name]);
+  const demoted = statusBefore === "publish" && stored.status === "draft" ? " The post was published; it is now a draft." : "";
+  const filtered = sanitized.length > 0 ? ` The site's save filters changed the ${sanitized.join(", ")} as stored.` : "";
+  return {
+    ...base,
+    next: "written",
+    proposalId: `wp-${postId}-${revisionId}`,
+    changes,
+    message: `Saved the reviewed change to post ${postId}.${demoted}${filtered}`,
+  };
 }
 
 /**
  * THE ONE CALLABLE EXPORT the declared-tools contract pins: one function of one
- * argument, `{ input, ports }`. Its operations are `form`, `unchanged` and
- * `read`; any other is refused.
+ * argument, `{ input, ports }`. Its operations are `page`, `form`, `unchanged`,
+ * `read` and `outcome`; any other is refused.
  */
 export async function extensionTool({ input, ports }) {
   const call = isPlainObject(input) ? input : {};
@@ -776,5 +981,7 @@ export async function extensionTool({ input, ports }) {
   if (op === "form") return form(call);
   if (op === "unchanged") return unchanged(call);
   if (op === "read") return read(call, ports);
-  throw new Error(`reviewed_change: \`op\` must be form, unchanged or read — got ${JSON.stringify(call.op)}`);
+  if (op === "page") return page(call);
+  if (op === "outcome") return outcome(call);
+  throw new Error(`reviewed_change: \`op\` must be page, form, unchanged, read or outcome — got ${JSON.stringify(call.op)}`);
 }
