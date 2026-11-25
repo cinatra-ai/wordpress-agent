@@ -81,7 +81,7 @@ export const OUTCOME_UNKNOWN_CODE = "write_outcome_unknown";
  */
 export const WRITE_REFUSALS = {
   site_policy_conflict:
-    "Nothing was written: the site's own save rules would also change another part of the post or its status. A person makes this change on the site.",
+    "Nothing was written: the site's own save rules or code would also change another part of the post or its status, or changed the post during the save. A person makes this change on the site.",
   permission_unverified:
     "Nothing was written: the site could not verify that this account may edit the post. Check the site's caching and permission plugins, then start a new run.",
   post_locked: "Nothing was written: another user is editing the post on the site. Start a new run when they are done.",
@@ -90,11 +90,20 @@ export const WRITE_REFUSALS = {
   empty_content:
     "Nothing was written: the change would have left the post empty, or the site's own rules count the result as empty. Ask for a change that keeps some content.",
   transaction_conflict:
-    "Nothing was written: the site's database has another transaction open, or is set so that this save cannot run on its own. Try again later; if it keeps happening, check the site's database settings and plugins.",
+    "Nothing was written: the site's database has another transaction open, lost the transaction of this save, or is set so that this save cannot run on its own. Try again later; if it keeps happening, check the site's database settings and plugins.",
   not_found: "Nothing was written: the post no longer exists, or this account may no longer edit it.",
   unsupported_storage: "Nothing was written: the site's database cannot lock a post row (the posts table does not use InnoDB).",
   db_error: "Nothing was written: the site's database refused the save. Start a new run later.",
 };
+
+/**
+ * `transaction_conflict` with `data.site_changes_possible` exactly true: this
+ * save did not change the post, but the site's own save code ran during the
+ * attempt and may have stored changes of its own. It must not say that nothing
+ * was written, so it replaces the message of `WRITE_REFUSALS.transaction_conflict`.
+ */
+const SITE_CHANGES_POSSIBLE =
+  "The post itself was not changed by this save, but other parts of the site may have been changed by the site's own code during the attempt. Check the post and the site before trying again.";
 
 /** Added to the message of a refusal that says the site's cache may still serve the post as it was. */
 const CACHE_STALE_NOTE = "The site may still show an outdated copy of the post for a while.";
@@ -150,7 +159,7 @@ const REFUSAL_WORDS = {
   [PAGE_CODE]: ["nothing was proposed", "start a new run"],
   [INPUT_CODE]: ["nothing was read from the site", "start a new run with a valid post and site"],
   [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
-  [OUTCOME_UNKNOWN_CODE]: ["the site did not confirm whether the change was stored", "check the post on the site before trying again"],
+  [OUTCOME_UNKNOWN_CODE]: ["the site did not confirm whether the change was stored", "check the post, its revisions and the site's caches before trying again"],
 };
 
 class Refusal extends Error {
@@ -1071,15 +1080,19 @@ function changedParts(data) {
  *   person on the next review that the change was proposed again against the
  *   current post, naming the changed parts the site named.
  * - each other refusal code of the ability (`WRITE_REFUSALS`): nothing was
- *   written; the run ends completed with `error` and its plain message.
+ *   written; the run ends completed with `error` and its plain message. The
+ *   one exception is `transaction_conflict` with `data.site_changes_possible`
+ *   exactly true: the post was not changed by this save, but the site's own
+ *   code may have changed other parts of the site, so its message does not say
+ *   that nothing was written.
  * - `write_outcome_unknown`: the site did not confirm whether the change was
- *   stored (`data.cause` `unreadable` or `differs`). The run fails with that
- *   code, and its message never says that nothing was written: the person
- *   checks the post on the site before trying again.
+ *   stored (`data.cause` `unreadable`, `matches` or `differs`; with `matches`
+ *   the post shows the change, but the site's after-save steps did not run).
+ *   The run fails with that code, and its message never says that nothing was
+ *   written or that the change was saved: the person checks the post, its
+ *   revisions and the site's caches before trying again.
  * - On a refusal, `data.cache_stale` exactly true adds one sentence: the site
- *   may still show an outdated copy of the post. On a save, `data.commit_unacknowledged`
- *   changes nothing: the site read the stored row back, so the save is a save and
- *   the message does not mention it.
+ *   may still show an outdated copy of the post.
  *
  * Any other answer is refused (`write_answer_unreadable`): the run fails and
  * tells the person to check the post on the site, because the save's outcome
@@ -1108,7 +1121,8 @@ function outcome(call) {
     };
   }
   if (success === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(WRITE_REFUSALS, code)) {
-    const message = `${WRITE_REFUSALS[code]}${stale}`;
+    const flagged = code === "transaction_conflict" && isPlainObject(data) && data.site_changes_possible === true;
+    const message = `${flagged ? SITE_CHANGES_POSSIBLE : WRITE_REFUSALS[code]}${stale}`;
     return { ...base, next: code, error: { code, message }, message };
   }
   if (success === false && code === OUTCOME_UNKNOWN_CODE) {
@@ -1116,9 +1130,11 @@ function outcome(call) {
     const why =
       cause === "unreadable"
         ? "the post could not be read back after the save"
-        : cause === "differs"
-          ? "the post read back after the save is not the post as it was before, so the change may have been stored without the site's after-save steps"
-          : "the site's answer names no cause this agent knows";
+        : cause === "matches"
+          ? "the post read back shows the change, but the site did not confirm the save and its after-save steps did not run"
+          : cause === "differs"
+            ? "the post read back is neither the post as it was before nor the change"
+            : "the site's answer names no cause this agent knows";
     throw new Refusal(OUTCOME_UNKNOWN_CODE, `${why}${cacheStale(data) ? ", and the site may still show an outdated copy of the post" : ""}`);
   }
   if (success !== true) refuse("the site's answer is neither a save nor a refusal this agent knows");

@@ -476,7 +476,7 @@ test("F16 an answer that is neither a save nor a known refusal fails the run and
 // Every code the site ability `cinatra/post-update-if-unchanged` answers, as its
 // documentation lists them (cinatra-ai/wordpress-plugin, "Content abilities" in
 // docs/advanced-and-reference.md, and the refusals of cinatra.php), read at PR #120
-// head 6601dc2cbc76c5a2886ef78e10bde49c5cbcbf1c. When the plugin documents another
+// head c6c21095eff8ab91b0aa826b3da41d525822bd77. When the plugin documents another
 // code, add it here: the test below then fails until the pack maps it explicitly.
 const PLUGIN_REFUSAL_CODES = [
   "post_changed",
@@ -492,6 +492,9 @@ const PLUGIN_REFUSAL_CODES = [
   "db_error",
   "write_outcome_unknown",
 ];
+// The values of `data.cause` in the plugin's output schema at the same head.
+// `transaction_conflict` answers the first five, `write_outcome_unknown` the last three.
+const PLUGIN_CAUSES = ["nested", "open_transaction", "autocommit_off", "transaction_lost", "connection_replaced", "unreadable", "matches", "differs"];
 
 test("F16a every code the plugin documents has an explicit outcome in the pack, and the pack maps no other code", async () => {
   const { WRITE_REFUSALS, OUTCOME_UNKNOWN_CODE } = await load();
@@ -522,6 +525,29 @@ test("F16b one case per refusal code: nothing written, its own message, the bran
   assert.match(empty.message, /left the post empty/);
   const busy = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { cause: "nested" } }), ports: {} });
   assert.match(busy.message, /Try again later/);
+  for (const cause of PLUGIN_CAUSES.slice(0, 5)) {
+    const out = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { cause } }), ports: {} });
+    assert.equal(out.message, busy.message, `${cause} without the flag keeps the message`);
+    assert.match(out.message, /^Nothing was written: /);
+  }
+  const flagged = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { cause: "connection_replaced", site_changes_possible: true } }), ports: {} });
+  assert.equal(flagged.next, "transaction_conflict");
+  assert.equal(flagged.error.code, "transaction_conflict");
+  assert.equal(flagged.error.message, flagged.message);
+  assert.equal(/nothing was written/i.test(flagged.message), false, "with the flag it never says nothing was written");
+  assert.match(flagged.message, /post itself was not changed by this save/);
+  assert.match(flagged.message, /other parts of the site may have been changed by the site's own code/);
+  assert.match(flagged.message, /check .* before (trying|you try) again/i);
+  for (const flag of [false, "true", 1, null]) {
+    const other = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { cause: "nested", site_changes_possible: flag } }), ports: {} });
+    assert.equal(other.message, busy.message, `${JSON.stringify(flag)} keeps the message`);
+  }
+  const flaggedStale = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { site_changes_possible: true, cache_stale: true } }), ports: {} });
+  assert.equal(flaggedStale.message, `${flagged.message} The site may still show an outdated copy of the post for a while.`);
+  const policy = await extensionTool({ input: outcomeCall({ success: false, code: "site_policy_conflict", message: "m", data: { changed: ["post_name"] } }), ports: {} });
+  assert.match(policy.message, /^Nothing was written: /);
+  assert.match(policy.message, /rules or code/);
+  assert.match(policy.message, /during the save/);
 });
 
 test("F16c data.cache_stale true on a refusal adds one sentence, for every refusal that ends the run and for post_changed; other values add none", async () => {
@@ -544,48 +570,39 @@ test("F16c data.cache_stale true on a refusal adds one sentence, for every refus
   assert.equal(none.reviewNotice.includes("outdated copy"), false);
 });
 
-test("F16d write_outcome_unknown fails the run with its own code and never says nothing was written; it takes no branch of route_write", async () => {
+test("F16d write_outcome_unknown fails the run with its own code and never says nothing was written or saved; it takes no branch of route_write", async () => {
   const { extensionTool } = await load();
   assert.equal(parts[ROUTE_STEP].branches.includes("write_outcome_unknown"), false, "the run fails at write_outcome; route_write never sees it");
-  assert.equal(
-    controlFrom(ROUTE_STEP).some((e) => e.from_branch === "write_outcome_unknown"),
-    false,
-  );
-  for (const cause of ["unreadable", "differs", undefined, "other"]) {
-    const data = cause === undefined ? {} : { cause };
-    await assert.rejects(extensionTool({ input: outcomeCall({ success: false, code: "write_outcome_unknown", message: "site text", data }), ports: {} }), (err) => {
-      assert.ok(refusedWith("write_outcome_unknown")(err), err.message);
-      assert.match(err.message, /did not confirm whether the change was stored/);
-      assert.match(err.message, /check the post on the site before trying again\.$/);
-      assert.equal(/nothing was written/i.test(err.message), false, "it never says nothing was written");
-      assert.equal(err.message.includes("site text"), false);
-      assert.equal(err.message.includes("outdated copy"), false);
-      return true;
-    }, String(cause));
-  }
+  assert.equal(controlFrom(ROUTE_STEP).some((e) => e.from_branch === "write_outcome_unknown"), false);
   const messageOf = async (data) => {
     try {
-      await extensionTool({ input: outcomeCall({ success: false, code: "write_outcome_unknown", message: "m", data }), ports: {} });
+      await extensionTool({ input: outcomeCall({ success: false, code: "write_outcome_unknown", message: "site text", data }), ports: {} });
     } catch (err) {
+      assert.ok(refusedWith("write_outcome_unknown")(err), err.message);
       return err.message;
     }
     throw new Error("no refusal");
   };
-  assert.match(await messageOf({ cause: "unreadable" }), /could not be read back/);
-  assert.match(await messageOf({ cause: "differs" }), /may have been stored/);
-  assert.notEqual(await messageOf({ cause: "unreadable" }), await messageOf({ cause: "differs" }));
+  const byCause = {};
+  for (const cause of [...PLUGIN_CAUSES.slice(5), undefined, "other"]) {
+    const message = await messageOf(cause === undefined ? {} : { cause });
+    byCause[cause] = message;
+    assert.match(message, /did not confirm whether the change was stored/);
+    assert.match(message, /check the post, its revisions and the site's caches before trying again\.$/);
+    assert.equal(/nothing was written|\bsaved\b/i.test(message), false, `${cause}: it never says nothing was written or saved`);
+    assert.equal(message.includes("site text"), false);
+    assert.equal(message.includes("outdated copy"), false);
+    assert.ok(message.length <= 400);
+  }
+  assert.match(byCause.unreadable, /could not be read back/);
+  assert.match(byCause.matches, /shows the change/);
+  assert.match(byCause.matches, /did not confirm the save/);
+  assert.match(byCause.matches, /after-save steps did not run/);
+  assert.match(byCause.differs, /neither the post as it was before nor the change/);
+  assert.equal(new Set([byCause.unreadable, byCause.matches, byCause.differs]).size, 3, "each cause has its own sentence");
+  assert.match(await messageOf({ cause: "matches", cache_stale: true }), /may still show an outdated copy of the post/);
   assert.match(await messageOf({ cause: "unreadable", cache_stale: true }), /may still show an outdated copy of the post/);
-  assert.notEqual(await messageOf({ cause: "unreadable" }), "write_answer_unreadable", "its code is its own");
-});
-
-test("F16e data.commit_unacknowledged true on a save leaves the success as it is: same changes, message and no error", async () => {
-  const { extensionTool } = await load();
-  const plain = await extensionTool({ input: outcomeCall(saved({ data: { commit_unacknowledged: false, cache_stale: false } })), ports: {} });
-  const unacknowledged = await extensionTool({ input: outcomeCall(saved({ data: { commit_unacknowledged: true, cache_stale: false } })), ports: {} });
-  assert.equal(unacknowledged.next, "written");
-  assert.deepEqual(unacknowledged, plain);
-  assert.deepEqual(unacknowledged.error, {});
-  assert.equal(/unacknowledged|confirm/i.test(unacknowledged.message), false);
+  assert.equal((await messageOf({ cause: "unreadable" })).startsWith("write_answer_unreadable"), false, "its code is its own");
 });
 
 test("F17 the read-back answers the reviewed values one by one and the reviewed revision as the card's list", () => {
