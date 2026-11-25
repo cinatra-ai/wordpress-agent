@@ -279,7 +279,7 @@ test("F6 the write step is the one publishing step: top-level, model-free, one c
 });
 
 const READ_INPUTS = { postId: "post_id", modified: "post_modified_gmt", title: "post_title", content: "post_content", excerpt: "post_excerpt", status: "post_status", rowToken: "row_token" };
-const REVIEWED_INPUTS = ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"];
+const REVIEWED_INPUTS = ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"];
 
 test("F7 every argument is a template over a declared input, and each input is fed by exactly one edge, from the read or from the reviewed revision", () => {
   const write = parts[WRITE_STEP];
@@ -319,6 +319,7 @@ const writeVars = (over = {}) => ({
   status: "draft",
   rowToken: TOKEN,
   reviewedTitle: "",
+  reviewedTitleSet: false,
   reviewedContent: "<p>We are open Monday to Saturday \u{1F600} é.</p>\n<p>Tom & Jerry's</p></script>",
   reviewedExcerpt: "",
   reviewedRevisionId: "revision-2",
@@ -347,7 +348,7 @@ test("F9 a published post is moved to draft in the same save; a title change alo
   const published = JSON.parse(render(template, writeVars({ status: "publish" })));
   assert.equal(published.status, "draft");
   assert.equal(published.expected.status, "publish", "the expected status stays the status as read");
-  const titleOnly = JSON.parse(render(template, writeVars({ reviewedTitle: "New \"title\" <b>", reviewedContent: "" })));
+  const titleOnly = JSON.parse(render(template, writeVars({ reviewedTitle: "New \"title\" <b>", reviewedTitleSet: true, reviewedContent: "" })));
   assert.deepEqual(Object.keys(titleOnly).sort(), ["expected", "if_unmodified_since", "post_id", "title"]);
   assert.equal(titleOnly.title, 'New "title" <b>');
 });
@@ -605,6 +606,43 @@ test("F16d write_outcome_unknown fails the run with its own code and never says 
   assert.equal((await messageOf({ cause: "unreadable" })).startsWith("write_answer_unreadable"), false, "its code is its own");
 });
 
+test("F17a the write sends a cleared title as the empty text, an untouched field not at all, and a changed title as it is", () => {
+  const template = parts[WRITE_STEP].data.input.argsJson;
+  const cleared = JSON.parse(render(template, writeVars({ reviewedTitle: "", reviewedTitleSet: true, reviewedContent: "" })));
+  assert.equal(cleared.title, "", "the cleared title is sent as the empty text");
+  assert.deepEqual(Object.keys(cleared).sort(), ["expected", "if_unmodified_since", "post_id", "title"], "nothing else is sent");
+  assert.equal(cleared.expected.title, 'Opening "hours"', "the title as read stays in expected");
+  const untouched = JSON.parse(render(template, writeVars({ reviewedTitle: "", reviewedTitleSet: false })));
+  assert.equal("title" in untouched, false, "an untouched title is absent, not empty");
+  const read = { postId: 42, title: "T", content: "<p>C</p>", excerpt: "", status: "draft", modified: "2026-11-20 10:00:00", rowToken: TOKEN };
+  assert.equal(JSON.parse(tool.writeArgsText(read, { title: "", content: null, excerpt: null })).title, "");
+  assert.equal("title" in JSON.parse(tool.writeArgsText(read, { title: null, content: "<p>D</p>", excerpt: null })), false);
+  const input = parts[WRITE_STEP].inputs.find((i) => i.title === "reviewedTitleSet");
+  assert.equal(input.type, "boolean");
+  assert.equal(input.default, false);
+});
+
+test("F17b the outcome of a cleared title names the change from the title as read to the empty text; an untouched title is not named", async () => {
+  const { extensionTool } = await load();
+  const out = await extensionTool({
+    input: outcomeCall(saved({ post_title: "", post_content: "<p>Old</p>", post_status: "draft" }), {
+      reviewedTitleSet: JSON.stringify(true),
+      reviewedTitle: JSON.stringify(""),
+      reviewedContent: JSON.stringify(""),
+    }),
+    ports: {},
+  });
+  assert.equal(out.next, "written");
+  assert.deepEqual(out.changes, [
+    { field: "title", before: "Opening hours", after: "" },
+    { field: "status", before: "publish", after: "draft" },
+  ]);
+  const untouched = await extensionTool({ input: outcomeCall(saved(), { reviewedTitleSet: JSON.stringify(false) }), ports: {} });
+  assert.equal(untouched.changes.some((c) => c.field === "title"), false);
+  assert.equal(parts[OUTCOME_STEP].inputs.find((i) => i.title === "reviewedTitleSet")?.type, "boolean");
+  assert.deepEqual(sourcesOf(OUTCOME_STEP, "reviewedTitleSet"), [[REVIEWED_READ, "reviewedTitleSet"]]);
+});
+
 test("F17 the read-back answers the reviewed values one by one and the reviewed revision as the card's list", () => {
   const outputs = titles(parts[REVIEWED_READ].outputs);
   for (const name of REVIEWED_INPUTS) assert.ok(outputs.includes(name), `${REVIEWED_READ} outputs ${name}`);
@@ -706,6 +744,7 @@ const sentText = (v) =>
     status: v.status ?? "draft",
     rowToken: v.rowToken ?? TOKEN,
     reviewedTitle: v.reviewedTitle ?? "",
+    reviewedTitleSet: v.reviewedTitleSet ?? (v.reviewedTitle ?? "") !== "",
     reviewedContent: v.reviewedContent ?? "",
     reviewedExcerpt: v.reviewedExcerpt ?? "",
     reviewedRevisionId: "",
@@ -742,13 +781,14 @@ test("F24 the rendered argsJson parses back to the same values, with the templat
 test("F25 the tool's text of the write is byte for byte the rendered template, for every shape the template takes", () => {
   const values = { title: "T é <", content: "<p>C & \u{1F600}</p>", excerpt: "E '", modified: "2026-11-20 10:00:00", rowToken: TOKEN };
   for (const status of ["publish", "draft"]) {
-    for (let mask = 1; mask < 8; mask += 1) {
+    for (let mask = 1; mask < 16; mask += 1) {
+      if (mask & 8 && !(mask & 1)) continue;
       const reviewed = {
-        title: mask & 1 ? "New <t>" : null,
+        title: mask & 1 ? (mask & 8 ? "" : "New <t>") : null,
         content: mask & 2 ? "<p>new ü</p>" : null,
         excerpt: mask & 4 ? "new 'e'" : null,
       };
-      const expected = sentText({ ...values, status, reviewedTitle: reviewed.title ?? "", reviewedContent: reviewed.content ?? "", reviewedExcerpt: reviewed.excerpt ?? "" });
+      const expected = sentText({ ...values, status, reviewedTitle: reviewed.title ?? "", reviewedTitleSet: reviewed.title !== null, reviewedContent: reviewed.content ?? "", reviewedExcerpt: reviewed.excerpt ?? "" });
       assert.equal(tool.writeArgsText({ postId: 42, ...values, status }, reviewed), expected, `status ${status}, fields ${mask}`);
     }
   }

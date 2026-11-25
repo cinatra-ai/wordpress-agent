@@ -126,7 +126,7 @@ test("S1 the filed page record names this run's post: post id, status, title, ad
   assert.deepEqual(pageForm.page, PAGE);
   const result = await extensionTool({ input: readCall(), ports: portsWith(pageForm) });
   assert.deepEqual(
-    { title: result.reviewedTitle || null, content: result.reviewedContent || null, excerpt: result.reviewedExcerpt || null },
+    { title: result.reviewedTitleSet ? result.reviewedTitle : null, content: result.reviewedContent || null, excerpt: result.reviewedExcerpt || null },
     CONTENT_CHANGE,
   );
 });

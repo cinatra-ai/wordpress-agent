@@ -548,7 +548,7 @@ test("S6: the write step follows the review and saves only the reviewed page sna
     ["read_reviewed_page"],
     "the only control edge into the write step comes from the read of the reviewed revision",
   );
-  for (const input of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+  for (const input of ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
     assertEdgeFrom("write_page", input, "read_reviewed_page");
   for (const gone of ["artifactId", "representationRevisionId", "reviewedPage", "reviewedTruncated", "proposedFields", "instructions"])
     assert.equal(find(node.inputs, gone), undefined, `the write step takes no ${gone}`);
@@ -583,7 +583,7 @@ test("S9: the approved revision is read back after the review, by the revision i
   assertEdgeFrom("read_reviewed_page", "cinatra_run_id", "start");
   for (const field of ["title", "content", "excerpt"]) assertEdgeFrom("read_reviewed_page", field, "check_read");
   assert.equal(edgeInto("read_reviewed_page", "representationRevisionId"), undefined, "the filed revision is never the one read");
-  assert.deepEqual(titles(node.outputs), ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot", "ok"]);
+  assert.deepEqual(titles(node.outputs), ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot", "ok"]);
   assert.deepEqual(
     controlInto("read_reviewed_page").map((e) => e.from_node.$component_ref),
     [GATE],

@@ -9,9 +9,11 @@
  *   successful read of the run's post and hands its values on; see `page`.
  * - `form` (step `form_page`, in front of the filing). The compose step answers
  *   the values to save (`writeFields`: the complete new `title`, `content` and
- *   `excerpt`, each a non-empty string or null). A value that equals the post
- *   as read is set to null: null means "not saved", so only a field that
- *   changes is filed and saved. This operation derives the excerpts the review
+ *   `excerpt`, each a text or null; the title may be the empty text, which
+ *   clears it, while an empty content or excerpt is refused). A value that
+ *   equals the post as read is set to null: null means "not saved" and the empty
+ *   text means "saved as empty", two different things all the way to the
+ *   write, so only a field that changes is filed and saved. This operation derives the excerpts the review
  *   shows from those values and the post as read, by code: each value is split
  *   into blocks by one rule, the blocks of the post as read and of the value
  *   are compared, and every block that differs is shown as its source text,
@@ -34,7 +36,8 @@
  *   revision id, derives the excerpts again from its `writeFields` and the post
  *   as read, and answers the values only when they equal the excerpts the
  *   revision shows and every value it would save is shown by them. It answers
- *   each value as its own text (empty when not saved) and the approved
+ *   each value as its own text (empty when not saved), `reviewedTitleSet` (true
+ *   when the title is saved, also as the empty text) and the approved
  *   revision, which the publishing step takes one by one.
  * - `outcome` (step `write_outcome`, after the publishing step): it reads the
  *   site's answer to `cinatra/post-update-if-unchanged` and answers the branch
@@ -154,9 +157,9 @@ const FIELDS = ["title", "content", "excerpt"];
 
 /** How a refusal sentence of each code starts and ends. */
 const REFUSAL_WORDS = {
-  [FORM_CODE]: ["nothing was filed", "start a new run"],
+  [FORM_CODE]: ["no page snapshot was filed by this step and nothing was written", "start a new run"],
   [READ_CODE]: ["nothing was written", "start a new run"],
-  [PAGE_CODE]: ["nothing was proposed", "start a new run"],
+  [PAGE_CODE]: ["no change was written", "start a new run"],
   [INPUT_CODE]: ["nothing was read from the site", "start a new run with a valid post and site"],
   [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
   [OUTCOME_UNKNOWN_CODE]: ["the site did not confirm whether the change was stored", "check the post, its revisions and the site's caches before trying again"],
@@ -520,7 +523,12 @@ export function excerptsOf(read, writeFields, refuse, meter) {
   return out;
 }
 
-/** The values to save, as `title`, `content` and `excerpt`, each a non-empty string or null. */
+/**
+ * The values to save, as `title`, `content` and `excerpt`. Null is "not saved".
+ * The title may also be the empty text (saved as empty: the title is cleared);
+ * the content and the excerpt are non-empty texts or null, and an empty one is
+ * refused: the agent never empties them.
+ */
 function writeFieldsOf(value, refuse) {
   if (!isPlainObject(value)) refuse("there are no values to save");
   const other = Object.keys(value).filter((key) => !FIELDS.includes(key));
@@ -530,7 +538,10 @@ function writeFieldsOf(value, refuse) {
   const fields = {};
   for (const field of FIELDS) {
     const item = value[field];
-    if (item !== null && !isNonBlank(item)) refuse(`the value to save for the ${field} is neither a text nor null`);
+    if (item === "" && field !== "title") {
+      refuse(`the value to save for the ${field} is an empty text, and the agent never empties the ${field}; a field that does not change is null`);
+    }
+    if (item !== null && !(field === "title" && item === "") && !isNonBlank(item)) refuse(`the value to save for the ${field} is neither a text nor null`);
     fields[field] = item;
   }
   return fields;
@@ -771,16 +782,18 @@ export function tojsonText(value) {
 /**
  * The write step's `argsJson` as the runtime renders `write_page`'s template:
  * the same literal punctuation, a `tojson` per value, a reviewed value only
- * when it is not empty (`{% if reviewedTitle %}`), and the demotion of a
- * published post. A test renders the template of cinatra/oas.json for every
+ * when the review saves it (`reviewed[field]` is not null: the title is sent as
+ * the empty text when it is cleared; `{% if reviewedTitleSet %}`, and
+ * `{% if reviewedContent %}` and `{% if reviewedExcerpt %}`, which are never
+ * empty when saved), and the demotion of a published post. A test renders the template of cinatra/oas.json for every
  * shape it takes and requires this text byte for byte, so the two cannot drift.
  */
 export function writeArgsText(read, reviewed) {
   const t = tojsonText;
   let text = `{"post_id": ${t(read.postId)}, "if_unmodified_since": ${t(read.modified)}, "expected": {"title": ${t(read.title)}, "content": ${t(read.content)}, "excerpt": ${t(read.excerpt)}, "status": ${t(read.status)}, "row_token": ${t(read.rowToken)}}`;
   for (const field of FIELDS) {
-    const value = reviewed[field] ?? "";
-    if (value !== "") text += `, ${t(field)}: ${t(value)}`;
+    const value = reviewed[field] ?? null;
+    if (value !== null) text += `, ${t(field)}: ${t(value)}`;
   }
   if (read.status === "publish") text += ', "status": "draft"';
   return `${text}}`;
@@ -843,6 +856,16 @@ function oneLine(text, max) {
  * dropped, and no code can tell the two apart. So the run ends completed, and
  * the message tells the person that nothing was proposed, reviewed or written
  * for their request, and repeats the request so they can see it.
+ *
+ * The same step also ends a SECOND pass: after a save was refused with
+ * `post_changed`, the flow read the post again, and the new proposal changes
+ * nothing (the post may already have the requested state). Then a change WAS
+ * proposed and reviewed in this run, so the message says what happened in this
+ * run: the change was proposed and reviewed, the site reported that the post
+ * changed meanwhile, the new proposal changes nothing, nothing further was
+ * written. `reviewNotice` (the notice `outcome` made for that refusal, empty on
+ * a first pass) tells the two apart, and its closing cache sentence, when it
+ * has one, is carried into the message.
  */
 function unchanged(call) {
   const refuse = (cause) => {
@@ -855,6 +878,23 @@ function unchanged(call) {
   if (!nothingChanges(writeFields)) refuse("the values to save change the post, which needs the review");
   const title = oneLine(read.title, TITLE_MAX);
   const request = oneLine(textInput(call.instructions) ?? "", REQUEST_MAX);
+  const notice = (textInput(call.reviewNotice) ?? "").trim();
+  if (notice !== "") {
+    const carried = notice.endsWith(CACHE_STALE_NOTE) ? ` ${CACHE_STALE_NOTE}` : "";
+    const lead =
+      `A change was proposed and reviewed for this request on post ${read.postId} ("${title}"), but the site reported that the post changed meanwhile, so that change was not written. ` +
+      "On reading the post again, no further change was proposed (the post may already have the requested state), so nothing further was written.";
+    return {
+      ok: true,
+      postId: read.postId,
+      instanceId: readText(call.instanceId).trim(),
+      proposalId: "",
+      changeSetId: "",
+      changes: [],
+      error: {},
+      message: `${lead}${carried}${request === "" ? "" : ` Request: ${request}`}`,
+    };
+  }
   const lead = `No change was proposed for this request on post ${read.postId} ("${title}"), so nothing was reviewed or written`;
   return {
     ok: true,
@@ -933,6 +973,7 @@ async function read(call, ports) {
   return {
     ok: true,
     reviewedTitle: writeFields.title ?? "",
+    reviewedTitleSet: writeFields.title !== null,
     reviewedContent: writeFields.content ?? "",
     reviewedExcerpt: writeFields.excerpt ?? "",
     reviewedRevisionId: revisionId,
@@ -1148,7 +1189,8 @@ function outcome(call) {
   if (revisionId === "") refuse("the run names no reviewed revision");
   const changes = [];
   for (const [field, input] of [["title", "reviewedTitle"], ["content", "reviewedContent"], ["excerpt", "reviewedExcerpt"]]) {
-    if ((textInput(call[input]) ?? "") === "") continue;
+    const saved = field === "title" ? jsonValue(call.reviewedTitleSet) === true : (textInput(call[input]) ?? "") !== "";
+    if (!saved) continue;
     changes.push({ field, before: textInput(call[field]) ?? "", after: stored[field] });
   }
   const statusBefore = textInput(call.status) ?? "";

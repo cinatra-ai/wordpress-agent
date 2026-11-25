@@ -134,3 +134,77 @@ test("N6 the README says that a change of nothing ends with a message that repea
   assert.doesNotMatch(readme, /Empty `changes` with no `error`: nothing needed changing/);
   assert.match(readme, /no change was proposed/i);
 });
+
+// --- a second pass, after the site reported that the post changed ---------------
+
+const RETRY_LEAD =
+  'A change was proposed and reviewed for this request on post 42 ("Opening hours"), but the site reported that the post changed meanwhile, so that change was not written. ' +
+  "On reading the post again, no further change was proposed (the post may already have the requested state), so nothing further was written.";
+
+/** The notice the outcome step makes for a post_changed answer, which the flow hands to this step. */
+async function noticeFor(data) {
+  const { extensionTool } = await load();
+  const out = await extensionTool({
+    input: {
+      op: "outcome",
+      success: "false",
+      code: JSON.stringify("post_changed"),
+      data: JSON.stringify(data),
+      postId: JSON.stringify("42"),
+      instanceId: JSON.stringify("site-1"),
+    },
+    ports: {},
+  });
+  assert.equal(out.next, "post_changed");
+  return out.reviewNotice;
+}
+
+test("N7 after post_changed the final message tells what happened in this run: proposed and reviewed, the post changed meanwhile, nothing further written", async () => {
+  const { extensionTool } = await load();
+  const reviewNotice = await noticeFor({ changed: ["post_content"] });
+  const out = await extensionTool({ input: { ...call("Fix the typo"), reviewNotice: JSON.stringify(reviewNotice) }, ports: {} });
+  assert.equal(out.message, `${RETRY_LEAD} Request: Fix the typo`);
+  assert.deepEqual(out.changes, []);
+  assert.deepEqual(out.error, {});
+  assert.doesNotMatch(out.message, /No change was proposed|nothing was reviewed|outdated copy/);
+  const empty = await extensionTool({ input: { ...call(""), reviewNotice: JSON.stringify(reviewNotice) }, ports: {} });
+  assert.equal(empty.message, RETRY_LEAD);
+});
+
+test("N8 the stale-cache warning of the refused attempt is carried into the final message; none is made up", async () => {
+  const { extensionTool } = await load();
+  const stale = await noticeFor({ changed: ["post_content"], cache_stale: true });
+  const out = await extensionTool({ input: { ...call("Fix the typo"), reviewNotice: JSON.stringify(stale) }, ports: {} });
+  assert.equal(out.message, `${RETRY_LEAD} The site may still show an outdated copy of the post for a while. Request: Fix the typo`);
+  const fresh = await extensionTool({ input: { ...call("Fix the typo"), reviewNotice: JSON.stringify(await noticeFor({ changed: [], cache_stale: false })) }, ports: {} });
+  assert.doesNotMatch(fresh.message, /outdated/);
+});
+
+test("N9 the step takes the notice only from the write outcome, empty on a first pass, and a first pass keeps its message", async () => {
+  const { extensionTool } = await load();
+  assert.deepEqual(sourcesOf(STEP, "reviewNotice"), [["write_outcome", "reviewNotice"]]);
+  const input = parts[STEP].inputs.find((i) => i.title === "reviewNotice");
+  assert.equal(input.type, "string");
+  assert.equal(input.default, "", "a first pass has no notice");
+  assert.match(parts[STEP].data.input.input.reviewNotice, /\{\{ reviewNotice \| tojson \}\}/);
+  const first = await extensionTool({ input: { ...call("Fix the typo"), reviewNotice: JSON.stringify("") }, ports: {} });
+  assert.equal(first.message, `${LEAD}Fix the typo`);
+});
+
+test("N10 every message that can end a run holds on a second pass too: none says nothing was proposed, filed or reviewed", async () => {
+  const { extensionTool, WRITE_REFUSALS } = await load();
+  const messages = [];
+  for (const input of [{ op: "page", success: "false", code: JSON.stringify("not_found") }, { op: "form", pageForm: "x" }]) {
+    try {
+      await extensionTool({ input, ports: {} });
+    } catch (err) {
+      messages.push(err.message);
+    }
+  }
+  assert.equal(messages.length, 2);
+  messages.push(...Object.values(WRITE_REFUSALS));
+  for (const message of messages) {
+    assert.doesNotMatch(message, /nothing was (proposed|reviewed|filed)|no change was proposed/i, message);
+  }
+  assert.ok(messages.some((m) => m.includes("no change was written")), "the failed read says that no change was written");
+});

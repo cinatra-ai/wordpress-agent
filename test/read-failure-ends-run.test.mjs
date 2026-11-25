@@ -52,7 +52,7 @@ test("R1: the check refuses every failed read, of any shape, and never repeats t
       extensionTool({ input: call(answer), ports: {} }),
       (err) =>
         err.name === "ExtensionToolCallRefusal" &&
-        err.message.startsWith(`${PAGE_CODE}: nothing was proposed, because `) &&
+        err.message.startsWith(`${PAGE_CODE}: no change was written, because `) &&
         !err.message.includes("SITE TEXT") &&
         !err.message.includes("<b>"),
       JSON.stringify(answer),

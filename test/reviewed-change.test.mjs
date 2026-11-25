@@ -70,7 +70,7 @@ const sameWords = (a, b) => a.trim().split(/\s+/).join(" ") === b.trim().split(/
 const load = () => import("../cinatra/tools/reviewed-change.mjs");
 /** The values the read-back answers, as the three fields with null for a field that is not saved. */
 const fieldsOf = (result) => ({
-  title: result.reviewedTitle === "" ? null : result.reviewedTitle,
+  title: result.reviewedTitleSet ? result.reviewedTitle : null,
   content: result.reviewedContent === "" ? null : result.reviewedContent,
   excerpt: result.reviewedExcerpt === "" ? null : result.reviewedExcerpt,
 });
@@ -172,7 +172,7 @@ test("T1 the flow derives the filed form by the tool, and reads the approved rev
   assert.deepEqual(sourcesOf("read_reviewed_page", "representationRevisionId"), [], "the filed revision is never the one read");
   assert.deepEqual(controlInto("read_reviewed_page"), ["page_review_gate"]);
   assert.deepEqual(controlInto("write_page"), ["read_reviewed_page"]);
-  for (const name of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+  for (const name of ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
     assert.deepEqual(sourcesOf("write_page", name), [["read_reviewed_page", name]]);
   assert.deepEqual(
     oas.data_flow_connections
@@ -283,7 +283,7 @@ test("T8 each refusal ends the run before the write, and the tool reaches no sit
 });
 
 test("T9 the write step takes the values only from the read-back, one input per value, and the reviewed revision", async () => {
-  for (const name of ["reviewedTitle", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+  for (const name of ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
     assert.ok(titles(parts.write_page.inputs).includes(name), `the write step takes ${name}`);
   for (const gone of ["reviewedFields", "reviewedPage", "reviewedTruncated", "artifactId", "representationRevisionId"])
     assert.equal(titles(parts.write_page.inputs).includes(gone), false, `the write step takes no ${gone}`);
@@ -326,8 +326,8 @@ test("T12 the read-back refuses a revision that would save a field its excerpts 
     await assert.rejects(extensionTool({ input: readCall(answer([FILED])), ports }), refusedWith(READ_CODE), `an unchanged ${field}`);
   }
   const template = parts.write_page.data.input.argsJson;
-  for (const [field, input] of [["title", "reviewedTitle"], ["content", "reviewedContent"], ["excerpt", "reviewedExcerpt"]])
-    assert.ok(template.includes(`{% if ${input} %}, "${field}": {{ ${input} | tojson }}{% endif %}`), `the save sends the ${field} only when the review saves it`);
+  for (const [field, input, condition] of [["title", "reviewedTitle", "reviewedTitleSet"], ["content", "reviewedContent", "reviewedContent"], ["excerpt", "reviewedExcerpt", "reviewedExcerpt"]])
+    assert.ok(template.includes(`{% if ${condition} %}, "${field}": {{ ${input} | tojson }}{% endif %}`), `the save sends the ${field} only when the review saves it`);
 });
 
 // --- the work of the comparison is bounded --------------------------------------
@@ -605,4 +605,73 @@ test("T21 the read-back applies the same rule to the approved revision", async (
   const preSnapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: withContent(changed), excerpts: preShown });
   const pre2 = portsAnswering({ [FILED.representationRevisionId]: preSnapshot });
   await assert.rejects(extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(old) }, ports: pre2.ports }), refusedSpace("content", READ_CODE));
+});
+
+// --- "no change to a field" and "set a field to empty" are two different things ----
+
+/** The read-back of the revision that `writeFields` files, approved as filed. */
+async function readBack(writeFields, read = READ) {
+  const { extensionTool } = await load();
+  const form = await formOf(writeFields, read);
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
+  return { form, result: await extensionTool({ input: readCall(answer([FILED])), ports }) };
+}
+
+test("E1 a cleared title is a change: filed as the empty text, shown as a removal, read back as saved and empty", async () => {
+  const { form, result } = await readBack({ title: "", content: null, excerpt: null });
+  assert.equal(form.writeFields.title, "", "the empty text is kept, not turned into null");
+  assert.equal(form.writeFields.content, null);
+  const shown = form.excerpts.filter((e) => e.region === "title");
+  assert.deepEqual(shown.map((e) => [e.published, e.proposed]), [[READ.title, ""]], "the review shows the title being cleared");
+  assert.equal(result.reviewedTitle, "");
+  assert.equal(result.reviewedTitleSet, true, "empty and saved is not the same as not saved");
+  assert.equal(result.reviewedContent, "");
+  assert.equal(result.reviewedExcerpt, "");
+  assert.deepEqual(fieldsOf(result), { title: "", content: null, excerpt: null });
+});
+
+test("E2 an untouched field stays untouched: null all the way, and a title equal to the read is not a change", async () => {
+  const changed = READ.content.replace("Friday", "Saturday");
+  const { form, result } = await readBack({ title: null, content: changed, excerpt: null });
+  assert.equal(form.writeFields.title, null);
+  assert.equal(result.reviewedTitleSet, false);
+  assert.deepEqual(fieldsOf(result), { title: null, content: changed, excerpt: null });
+  const equal = await readBack({ title: READ.title, content: changed, excerpt: null });
+  assert.equal(equal.form.writeFields.title, null, "a title equal to the post as read is set to null");
+  assert.equal(equal.result.reviewedTitleSet, false);
+  const { extensionTool } = await load();
+  const bare = { ...READ, title: "" };
+  const unchangedEmpty = await extensionTool({
+    input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", writeFields: { title: "", content: null, excerpt: null } }), ...readInputs(bare) },
+    ports: {},
+  });
+  assert.equal(unchangedEmpty.next, "no_change", "an empty title on a post whose title is empty changes nothing");
+});
+
+test("E3 an empty content or excerpt is refused at the form and at the read-back, each with its own message; a blank title is refused too", async () => {
+  const { extensionTool } = await load();
+  for (const field of ["content", "excerpt"]) {
+    const writeFields = { title: null, content: null, excerpt: null, [field]: "" };
+    await assert.rejects(
+      formOf(writeFields),
+      (err) => refusedWith(FORM_CODE)(err) && err.message.includes(`the value to save for the ${field} is an empty text`) && err.message.includes(`never empties the ${field}`),
+      `the form refuses an empty ${field}`,
+    );
+    const filed = JSON.stringify({ ...(await formOf({ title: "New", content: null, excerpt: null })), writeFields });
+    const { ports } = portsAnswering({ [FILED.representationRevisionId]: filed });
+    await assert.rejects(
+      extensionTool({ input: readCall(answer([FILED])), ports }),
+      (err) => refusedWith(READ_CODE)(err) && err.message.includes(`the value to save for the ${field} is an empty text`),
+      `the read-back refuses an empty ${field}`,
+    );
+  }
+  await assert.rejects(formOf({ title: " ", content: null, excerpt: null }), (err) => refusedWith(FORM_CODE)(err) && /neither a text nor null/.test(err.message));
+  await assert.rejects(formOf({ title: 7, content: null, excerpt: null }), refusedWith(FORM_CODE));
+});
+
+test("E4 the compose step's instructions say what null and the empty text mean", () => {
+  const system = parts.compose_change.data.system;
+  assert.match(system, /Never an empty string for content or excerpt/);
+  assert.match(system, /title may be the empty string only when the request is to clear the title/);
+  assert.match(system, /a title that does not change is null/);
 });
