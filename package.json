@@ -2,7 +2,7 @@
   "name": "@cinatra-ai/wordpress-agent",
   "version": "0.1.9",
   "license": "Apache-2.0",
-  "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
+  "description": "Edits WordPress posts and pages from natural language: a person reviews the change, which is saved only if the post is unchanged.",
   "type": "module",
   "scripts": {
     "test": "sh -c \"node --test\""

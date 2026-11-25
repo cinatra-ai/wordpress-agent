@@ -1,27 +1,26 @@
 # WordPress Agent
 
-Edit a post on a connected WordPress site from a plain-language instruction — "tighten the intro", "swap the headline" — and get back a precise before-and-after diff of every field that changed. Preserves revision history when editing a published post. Pages are read-only in this release.
+Edit a post or page on a connected WordPress site from a plain-language instruction — "tighten the intro", "swap the headline". A person reviews the proposed change; only the reviewed values are saved, and only if the page did not change on the site since it was read.
 
-**Purpose.** Bridges Cinatra's content editor to the site's MCP ability catalog through the governed site-tool channel: reads the post, applies only the requested changes, returns a diff.
+**Purpose.** Reads the post with the site's `cinatra/post-read` ability, has one model step propose the change, files it as a page snapshot for review, and saves it with `cinatra/post-update-if-unchanged`. No model takes part in the read or the save.
 
-**Install.** Add `@cinatra-ai/wordpress-agent` from the Cinatra marketplace; the site comes from the instance record.
+**Install.** Add `@cinatra-ai/wordpress-agent` from the Cinatra marketplace; the site comes from the instance record. The site needs the Cinatra plugin's content abilities.
 
-**Configuration.** Supply `instanceId` (your registered WordPress instance), `postId`, `postType` (`post`, the default; `page` is read-only), `postStatus` (`publish` or `draft`), and a plain-language `instructions` string.
+**Configuration.** Supply `instanceId` (your registered WordPress instance), `postId`, `postType` (a hint: `post`, `page` or empty), and a plain-language `instructions` string. `postStatus` is not used.
 
-**Usage.** Trigger via the Cinatra content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. It saves only the approved snapshot's values (each change shown as source text), if the post did not change during review; a published post becomes a draft.
+**Usage.** Trigger via the content editor or the A2A API at `/api/agents/wordpress-content-editor/stream`. Review the snapshot (each changed block as source text), then release the save on the publish card. A published post becomes a draft. If the page changed meanwhile, nothing is written and you review a new proposal.
 
 **Development.** Start the local stack with `docker compose --profile wordpress up -d`. Runs on port 3021; override with `WP_CONTENT_EDITOR_A2A_URL` in `.env.local`.
 
-**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId` (required), optional `changeSetId`, and `changes: [{field, before, after}]`; a demote also adds a status entry. Failure: empty `changes` plus `error.code` — `unsupported_post_type` / `page_editing_unsupported` / `call_failed` (failed), `post_changed` (nothing written), `page_form_unavailable` / `reviewed_change_unavailable` (failed, nothing written) or `reread_failed` (saved, reread failed; has `proposalId`).
+**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId`, `changes: [{field, before, after}]` (after: the stored value; a demote adds a status entry), `message`. Refused by the site: empty `changes`, `error.code` (`site_policy_conflict`, `permission_unverified`, `post_locked`, `unsupported_status`, `invalid`, `not_found`, `unsupported_storage`, `db_error`) and a plain `message`; nothing written. Failed runs: `post_read_unavailable`, `page_form_unavailable`, `reviewed_change_unavailable`, `write_answer_unreadable` (check the post).
 
-**Troubleshooting.** A `500` usually means `instanceId` matches no registered connection. Empty `changes`, no `error`: no change was proposed; `message` repeats the request. Check `error` first (`reread_failed`: saved, unconfirmed).
+**Troubleshooting.** A `500` usually means an unknown `instanceId`. Empty `changes`, no `error`: no change was proposed; `message` repeats the request.
 
 ## Works with
 - WordPress
 
 ## Capabilities
-- Edit a WordPress post from a natural-language instruction
-- Return a precise before-and-after diff of every field that changed
+- Edit a WordPress post or page from a natural-language instruction
+- Show each proposed change for review before anything is saved
+- Save only the reviewed values, only if the page is unchanged
 - Preserve WordPress revision history when editing a published post
-- Touch only the fields you asked to change — leave the rest untouched
-- Read a page for reference (`postType: "page"`) — page editing not yet supported

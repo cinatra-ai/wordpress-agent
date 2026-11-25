@@ -1,26 +1,24 @@
 # wordpress-agent — AGENTS.md
 
-Agent-specific guidance for `@cinatra/wordpress-agent`. Read alongside the repo-root `AGENTS.md` and the agent instructions in `cinatra/oas.json` (the `edit` node's `data.system`).
+Agent-specific guidance for `@cinatra/wordpress-agent`. Read alongside the repo-root `AGENTS.md`, the flow in `cinatra/oas.json` and the pack tool `cinatra/tools/reviewed-change.mjs`.
 
-## KNOWN GAP — do not merge/deploy this cutover until ALL THREE close (cinatra-ai/cinatra#2022, #2043)
+## KNOWN GAP — do not merge or deploy this flow until each item below is closed (cinatra-ai/cinatra#3745)
 
-This repo's manifest/prompt now target the generic connector-instance invokers (`wordpress_site_tool_call` for reads, `wordpress_site_tool_write` for the post update) instead of the named `wordpress_post_get`/`wordpress_post_update` tools. Three things must be true before this actually ships to real traffic, not just "code exists":
+The flow reads and writes the site without a model: two of its steps call connector tools directly on the host's passthrough road (`/api/agents/passthrough`). The host does not serve connector tools there yet, so until these land a run fails at the read step with the road's refusal (`Tool "wordpress_site_tool_call" is not on the deterministic-passthrough allowlist`, HTTP 403). Nothing is written in that case.
 
-1. **wordpress-mcp-connector's transport retarget merges and soaks first.** This agent's prompt assumes `ewpa/get-post` / `ewpa/get-page` / `ewpa/update-post` exist and behave as wordpress-mcp-connector's own retarget PR documents (branch `feat/2022-s7-tau-review-gate`) — if that approach changes before it merges, this prompt needs a matching follow-up.
-2. **The review-before-publish gate (`evaluateStagedContentWrite`, cinatra#2043) must be reachable from this agent's new call path — it is NOT, yet.** Today that gate is wired INLINE inside wordpress-mcp-connector's `wordpress_post_update` handler, which is the exact handler this agent is being moved OFF of. wordpress-mcp-connector's transport-retarget PR explicitly does not migrate the gate onto the generic invoker's shared review-hook slot — it's a disclosed, deferred follow-up (binding a WordPress-specific hook into cinatra core's `register-host-connector-services.ts`, alongside where the existing destructive-confirmation hook is bound today, since a connector-only package cannot make that host-side edit). Until that binding lands AND is verified to fire for a write reaching WordPress through `wordpress_site_tool_write` (not just through the old named tool), deploying this agent's rewrite lets it apply real content writes with **no review-before-publish enforcement at all** — a silent regression, not a cosmetic one. Confirm that binding is live and tested before merging/cutting this agent over. Inside this flow, the write step saves only the values of the page snapshot revision the person reviewed: `read_reviewed_page` reads that revision back after the review, by its revision id, and the write step takes `title`/`content`/`excerpt` only from its `writeFields` member; with no usable reviewed change it writes nothing (`reviewed_change_unavailable`). That is an instruction to the model, not an enforcement: only the host-side gate holds a write to the reviewed revision.
-3. **cinatra core's in-admin CMS tool allowlist must admit the generic primitives — it does NOT, yet.** This agent's runs are classified host-side as in-admin CMS content-editor dispatches, and the hosted-MCP relay only advertises/permits tools named in `IN_ADMIN_CMS_MCP_ALLOWED_TOOLS` (`packages/mcp-server/src/in-admin-cms-tool-policy.ts` in the cinatra monorepo) — which today lists `wordpress_post_get`/`wordpress_post_update`, neither `wordpress_site_tool_call` (reads) nor `wordpress_site_tool_write` (the post update). Declaring a primitive in this repo's `consumes[]` is an install-time dependency check only; it grants nothing at runtime. Until the cinatra-core allowlist swaps in both `wordpress_site_tool_call` and `wordpress_site_tool_write` (planned to land together with the facade-deletion PR and this cutover, per the program's design), every call this agent's rewritten prompt makes is rejected by the relay with a structured denial — the agent simply cannot work. A connector/agent-repo PR structurally cannot make that edit; it must ship as its own cinatra-core change.
+1. **The host serves `wordpress_site_tool_write` to the publishing step `write_page`.** Today the road serves a tool off its allowlist only when a host-wired package declares `passthroughPublishingStep: true` (cinatra PR #4788, `src/lib/passthrough-publishing-step-tools.ts`, `HOST_PRIMITIVE_SOURCES`: the email send start only). The connector declares `passthroughStep: "publishing"` on the write tool's registration (wordpress-mcp-connector `src/mcp/registry.ts`, `PASSTHROUGH_STEPS`). The host must read that declaration from the installed connector's registration, serve the tool only to a top-level publishing step of the run's bound flow whose newest publish decision is released, use the decision once with the connector's own package, version, install id and digest as the action owner, run the handler in the run's MCP request frame (so the connector's instance write authority resolves), and let the released decision stand for the invoker's destructive confirmation (`cinatra/post-update-if-unchanged` is annotated destructive).
+2. **The host serves `wordpress_site_tool_call` to the read step `read_page`, with no person's decision, only after it enforces the read class at execution** (cinatra#4796, open: the invoker refuses an entry whose annotations differ from the row the connector checked, and refuses a read-declared call whose resolved entry is not read-class). Only then does the connector add `passthroughStep: "read"` to the read tool, and the host serves a tool so declared to a step that is not a publishing step.
+3. **The site runs the cinatra plugin with the two abilities `cinatra/post-read` and `cinatra/post-update-if-unchanged`** (cinatra-ai/wordpress-plugin PR #120). A site without them answers the read with an unknown tool, and the run fails at the read.
 
 ## Repair capability (cinatra-ai/cinatra#2286) — declared, but inert until cinatra core catches up
 
-`package.json`'s `cinatra.lifecycle.repairCapable: true` means this template's own runs can be re-driven for a repair round-trip: when a reviewer requests changes on a post this agent already edited, cinatra core can dispatch a NEW run of this SAME template instead of escalating straight to a human. That dispatched run uses no new input shape — it is the ordinary `instanceId`/`postId`/`postType`/`postStatus`/`instructions` contract documented below, with `instructions` describing the reviewer's findings instead of a person's free-form request. `cinatra/oas.json`'s `compose_change.data.system` tells the compose step to treat such findings as the request ("On a repair round the findings ARE the request"); the write step then saves only what the person reviewed, as on any run.
+`package.json`'s `cinatra.lifecycle.repairCapable: true` means this template's own runs can be re-driven for a repair round-trip: when a reviewer requests changes on a post this agent already edited, cinatra core can dispatch a NEW run of this SAME template instead of escalating straight to a human. That dispatched run uses no new input shape — it is the ordinary `instanceId`/`postId`/`postType`/`postStatus`/`instructions` contract documented below, with `instructions` describing the reviewer's findings instead of a person's free-form request. `compose_change.data.system` tells the compose step to treat such findings as the request ("On a repair round the findings ARE the request"); the write step then saves only what the person reviewed, as on any run.
 
-**This declaration has no effect by itself yet — nothing dispatches a repair run against it today.** It only starts doing anything once (a) cinatra core ships the delivered-repair execution bridge (the run-dispatch + completion-adapter plumbing that turns an open repair into a run of this template and reads the resulting write back into the repair record — this agent has no producer-side code of its own; its own normal run execution IS the handler), and (b) cinatra's pin for this package advances to a version carrying this declaration. Until both land, `repairCapable` is a harmless, unused label on the manifest — same posture as the KNOWN GAP above.
+**This declaration has no effect by itself yet — nothing dispatches a repair run against it today.** It only starts doing anything once (a) cinatra core ships the delivered-repair execution bridge, and (b) cinatra's pin for this package advances to a version carrying this declaration.
 
 ## Agent role
 
-A WayFlow `node`-type leaf agent. Receives natural language editing instructions and a WordPress post context, applies changes through the site's own MCP ability catalog via the governed connector-instance invokers (reads through `wordpress_site_tool_call`, the post update through `wordpress_site_tool_write`, cinatra-ai/cinatra#2022 S7), and returns a structured diff. Invoked via A2A blocking dispatch from `/api/agents/wordpress-content-editor/stream` (unified SSE gateway) or from `wordpress_content_editor_run` in Cinatra `/chat`.
-
-Mirrors `agents/drupal-content-editor` structurally but differs in the draft-revision approach — see the critical section below.
+A WayFlow `node`-type flow. It receives a plain-language request for one WordPress post or page, reads the post from the site, has one model step propose the new values, files them as a page snapshot for a person to review, and after the person's approval and release writes exactly the reviewed values, only if the post did not change on the site since the read. Invoked via A2A blocking dispatch from `/api/agents/wordpress-content-editor/stream` (unified SSE gateway) or from `wordpress_content_editor_run` in Cinatra `/chat`.
 
 ## A2A input contract
 
@@ -36,7 +34,7 @@ The caller sends a single `user` message whose text is a JSON-stringified object
 }
 ```
 
-All fields are strings. `postId` is a string representation of a numeric ID — the agent itself must coerce it to a number before including it as `post_id` in any `ewpa/*` ability args (there is no longer a schema-level coercion step between the agent and WordPress; see "MCP primitives used" below). The agent reads these from the most recent user message in conversation history.
+All fields are strings. `postId` must be a whole number; the read step sends it to the site as a number. `postType` is a hint (`post`, `page` or empty); the type comes from the site's read, and pages are edited like posts. Any other `postType` ends the run at the check of the read. `postStatus` is not used: the status comes from the read.
 
 ## A2A output contract
 
@@ -44,145 +42,71 @@ All fields are strings. `postId` is a string representation of a numeric ID — 
 {
   "postId": "42",
   "instanceId": "wp-prod",
-  "proposalId": "wp-42-k3f9qz",
-  "changeSetId": "rev-311",
+  "proposalId": "wp-42-<reviewed revision id>",
   "changes": [
     { "field": "title", "before": "Old headline", "after": "New headline" },
-    { "field": "content", "before": "Old paragraph...", "after": "Fixed paragraph..." }
-  ]
+    { "field": "status", "before": "publish", "after": "draft" }
+  ],
+  "message": "Saved the reviewed change to post 42. The post was published; it is now a draft."
 }
 ```
 
-`proposalId` is REQUIRED on every diff result (minted by the agent, opaque correlation string linking the diff card to the already-saved draft); `changeSetId` is OPTIONAL (present only when a response actually carried a revision identifier — never fabricated).
+All values are built by code (`write_outcome`), never by a model. `changes` names each saved field with the value as read and the value the site stored (its save filters can change it; `message` then names the fields), and the status when it changed. `proposalId` is present only after a save. `changeSetId` is never set (the site answers no revision id).
 
-**Unsupported-postType error variant** (no write attempted, so no `proposalId` — nothing was saved to correlate with):
+- **Completed, nothing written, with `error`:** the site refused the save with `site_policy_conflict`, `permission_unverified`, `post_locked`, `unsupported_status`, `invalid`, `not_found`, `unsupported_storage` or `db_error`. `error.code` is the site's code; `error.message` and `message` are a fixed plain sentence per code that starts "Nothing was written".
+- **Completed, nothing written, no `error`:** the model proposed no change. `message` repeats the request ("No change was proposed for this request on post 42 …").
+- **Failed:** `post_read_unavailable` (the read failed or is not of an editable post), `page_form_unavailable` (the proposal cannot be shown), `reviewed_change_unavailable` (no usable approved revision), `write_answer_unreadable` (the site's answer to the save is neither a save nor a known refusal: check the post on the site). A failure of the host's or the connector's call fails the step and the run.
 
-```json
-{
-  "postId": "42",
-  "instanceId": "wp-prod",
-  "changes": [],
-  "error": { "code": "unsupported_post_type", "message": "..." }
-}
+The caller reads this from `task.history` (not `task.artifacts`).
+
+## The flow (cinatra-ai/cinatra#3745)
+
+```
+start → read_page → check_read → compose_change → form_page → route_change
+route_change:default → file_page → gather_page_review → page_review_gate → read_reviewed_page → write_page → write_outcome → route_write
+route_change:no_change → no_change_outcome → emit_output → end
+route_write:written | <each refusal code> | default → emit_output → end
+route_write:post_changed → read_page
 ```
 
-Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) ends the run failed at the compose step, before anything is filed, reviewed or shown on the publish card. A request that changes nothing is no error: it ends the run completed with empty `changes`, no `error` and a `message`, past the filing and the review (see below).
+- `read_page` (no model): one call of `wordpress_site_tool_call` with `toolName: "cinatra/post-read"` and `argsJson: {"post_id": <postId as a number>}`. It outputs the site's answer as is: `success`, `code`, `post_id`, `post_title`, `post_content`, `post_excerpt`, `post_status`, `post_type`, `post_modified_gmt`, `permalink`, `row_token`.
+- `check_read` (pack tool, op `page`): goes on only for `success: true`, the run's post id, a post or a page, status `publish` or `draft` (the two the site writes), a change time and a row token of the site's form. Else `post_read_unavailable`.
+- `compose_change` is the only model step. It declares `metadata.cinatra.tools: []` and no toolbox, so the host serves it no tool. It answers `pageForm.writeFields`: the complete new `title`, `content` and `excerpt`, each a text or null.
+- `form_page`, `file_page`, `gather_page_review`, `page_review_gate` and `read_reviewed_page` file the proposal as a page snapshot, have a person review it and read back the approved revision; see "What the review shows". `read_reviewed_page` answers `reviewedTitle`, `reviewedContent`, `reviewedExcerpt` (empty when not saved), `reviewedRevisionId` and `reviewedSnapshot` (that revision as a one-item list).
+- `write_page` is the one publishing step (`publishes: true`, top-level, no model). See "The write".
+- `write_outcome` (pack tool, op `outcome`) reads the site's answer and answers `next` and the run's output. `route_write` branches on `next`: `written` and each refusal code end the run; `post_changed` goes back to `read_page`.
 
-**Stopped variant** (the run completes, nothing was written, no `proposalId`): `post_changed` when the post's change time or status differs, just before the write, from the read the review was based on (another editor changed, published or unpublished it during the review), and `reviewed_change_unavailable` when the write step is handed no usable reviewed values (a backstop; the step in front of it already fails the run in that case, see below). The `message` says that nothing was written.
+**`post_changed`.** The site refused the save because the post changed after the read (another save, also in the same second or of another column such as the slug). Nothing was written. The run goes back to the read: the post is read again, the model proposes the change again against the current post, a new snapshot is filed and the person reviews it; the review shows `reviewNotice` ("Nothing was written: the post changed on the site after it was read (changed: content). The change was proposed again against the current post; review it again."). The write then needs a new release on the publish card. Each turn of this loop waits for a person, so it cannot run on alone.
 
-The caller reads this from `task.history` (not `task.artifacts`) — WayFlow's `task.artifacts` is not implemented.
+## The write
 
-## The write saves only the reviewed change (cinatra-ai/cinatra#3745)
+`write_page` makes one call of `wordpress_site_tool_write` with `toolName: "cinatra/post-update-if-unchanged"` and `argsJson` rendered from a template over its own inputs:
 
-The flow is `start` → `read_page` → `compose_change` → `form_page` →
-`route_change` → `file_page` → `gather_page_review` → `page_review_gate` →
-`read_reviewed_page` → `edit` → `emit_output` → `end`. When no value to save
-changes the post, `form_page` answers `next: "no_change"` and the branch
-`route_change` takes the run to `no_change_outcome` (op `unchanged`, which
-checks this again) → `emit_output` → `end`: the run completes with empty
-`changes` and no `error`, and nothing is filed, reviewed or written. The
-output then carries `message`, built in code (never by the model) from the
-run's `instructions` (a data edge from `start`), the post id and the read
-title: "No change was proposed for this request on post 42 ("Opening
-hours"), so nothing was reviewed or written: <request>", the request
-flattened to one line and cut to 300 characters. The compose step's answer is
-the same for a request already satisfied and for a request the model dropped,
-so no code can tell them apart; the message lets the person see it. On the
-`edit` road `message` stays empty and is left out of the output.
+```
+{"post_id": <postId>, "if_unmodified_since": <modified>,
+ "expected": {"title": <title>, "content": <content>, "excerpt": <excerpt>, "status": <status>, "row_token": <rowToken>}
+ [, "title": <reviewedTitle>] [, "content": <reviewedContent>] [, "excerpt": <reviewedExcerpt>] [, "status": "draft" when status is publish]}
+```
 
-`compose_change` answers the values to save in `pageForm.writeFields`: the
-complete new `title`, `content` and `excerpt`, each a non-empty string or
-null. It answers no excerpts. `form_page` calls the pack's `reviewed_change`
-tool (`cinatra/tools/reviewed-change.mjs`, op `form`). It sets each value that
-equals the post as read to null (not saved), so the filed values, the shown
-excerpts and the saved values name the same fields. It derives the
-excerpts the review shows from those values and the post as read, by code: each
-value is split into its top-level blocks (an element with its content, a
-comment, or a run of text), the blocks of the post as read and of the value are
-compared, and every block that differs is shown with its source text on both
-sides, markup and link targets included. The blocks it does not show are byte
-for byte the post as read. So a change of a link target alone is shown, and no
-value can be saved that the review does not show. The tool refuses
-(`page_form_unavailable`, the run fails, nothing is filed) when the values
-differ from the post only in white space (the display shows no
-difference there), touch more than 200 blocks, or are not texts or null. It
-bounds its work before it compares: a value of more than 2,000,000
-characters, a content of more than 20,000 blocks, or a changed part (the
-blocks between the unchanged ones at the start and at the end) whose
-comparison table would exceed 4,000,000 cells is refused. The read-back
-applies the same bounds.
+Each value is written with `tojson`; no value is put into the JSON text by hand. Each input has exactly one data edge: `postId`, `modified`, `title`, `content`, `excerpt`, `status` and `rowToken` from `read_page` (the site's answer, byte for byte), the reviewed values and the revision from `read_reviewed_page`, `instanceId` from `start`. No value of the model step reaches the write. A field the review does not save is not sent. A published post is moved to draft in the same save, so the live page goes offline until a person publishes it; the previous revision stays in WordPress's revision history.
 
-After the review, `read_reviewed_page` calls the same tool (op `read`). It
-takes the revision the review's answer approves (`review.targets` of the
-answer that resumes the run; the answer must be an approval: `approved: true`
-and `review.decision` "approved", envelope version 1, exactly one target, on
-the artifact this run filed), never the revision this run filed: after a
-Regenerate the approved revision is a successor of the filed one. It reads that
-revision through the host's artifact read port by its revision id, derives the
-excerpts again from its `writeFields` and the post as read, and answers
-`reviewedFields` (the JSON text of the values) and `reviewedRevisionId` only
-when they equal the excerpts the revision shows and the excerpts show every
-value it would save. `edit` saves exactly
-`reviewedFields`. The tool refuses, so the run fails with
-`reviewed_change_unavailable` and a message and no WordPress call is made, when
-the answer names no single approved revision of the filed artifact, when the
-read fails, is cut short or answers another revision or artifact, when the text
-is not a WordPress page snapshot or carries no values to save, and when its
-values differ from the excerpts it shows or include a value the excerpts do
-not show. The re-read of the post before the
-write (`post_changed`), `page_editing_unsupported` and
-the rows of the publish card stay as they are.
+The site compares, under a row lock, the change time, the four values and the row token with the stored post, and writes only when all are equal (see the plugin's documentation, "Content abilities"). There is no re-read before the write and no window between a check and an unconditional update.
 
-What the review cannot show: a change of white space alone (refused, see
-above), and the post as read is the read step's answer, so the unshown blocks
-equal that answer, not a second read of the site. Plain text also hides
-characters and white space, so one rule applies to each changed block
-(`checkedBlock`), at the form and at the read-back, byte for byte, with no
-exception and no normalisation. A changed block that holds an invisible
-character (Unicode Cf, Cc except tab, line feed and carriage return, Zs except
-U+0020, so U+00A0 too, Zl, Zp, default ignorable characters and variation
-selectors) in the post as read or in the value to save is refused: the agent
-does not change such a block, a person does it on the site; this freezes
-blocks with joined emoji, emoji variation selectors, soft hyphens, direction
-marks or no-break spaces. In the changed part of a block (between its
-byte-equal start and end, widened so no run of white space is cut), white
-space may only be a single U+0020 between two visible characters: a tab, a
-line break or two spaces there, in text or inside markup such as an attribute,
-is refused. The excerpt shows the block's source, so markup and link targets
-are seen; the agent can change words and markup and add a block written
-without line breaks, but cannot change white space other than single spaces.
+**The publish card** shows four rows: the site (`instanceId`), the title as read, the status as read (its label states that a published post becomes a draft), and the reviewed page snapshot revision (`reviewedSnapshot`, an artifacts row: the changed blocks).
 
-## Draft-revision workflow — CRITICAL asymmetry with Drupal
+## What the review shows
 
-WordPress lacks a true draft-revision API. The agent prompt enforces a **demote-then-edit** pattern:
+`compose_change` answers the values to save in `pageForm.writeFields`. `form_page` calls the pack's `reviewed_change` tool (op `form`). It sets each value that equals the post as read to null (not saved), so the filed values, the shown excerpts and the saved values name the same fields. It derives the excerpts the review shows from those values and the post as read, by code: each value is split into its top-level blocks (an element with its content, a comment, or a run of text), the blocks of the post as read and of the value are compared, and every block that differs is shown with its source text on both sides, markup and link targets included. The blocks it does not show are byte for byte the post as read. The tool refuses (`page_form_unavailable`) when the values differ from the post only in white space, touch more than 200 blocks, or are not texts or null; it bounds its work before it compares (a value of more than 2,000,000 characters, a content of more than 20,000 blocks, or a comparison table of more than 4,000,000 cells is refused).
 
-1. `ewpa/get-post` (or `ewpa/get-page`) → read current content (including `content` field — required for before/after diff) and its change time; the change is composed, filed as a page snapshot and reviewed
-2. `ewpa/get-post` again just before the write — the write is made only when the change time and the status still equal the first read. This is a check, not a conditional write: `ewpa/update-post` takes no expected change time or revision (see the table below), so an edit saved on the site between this re-read and the update is overwritten. Closing that window needs the site ability to take an expected change time and refuse the update when the post's stored change time differs.
-3. `ewpa/update-post` with the reviewed values AND `status: "draft"` in the SAME call when the status read is `publish` — demotes the live post (the live revision is preserved in WordPress's revision history, but the front-of-site copy becomes a draft)
-4. `ewpa/get-post` again (independent re-read — the update ability's own response is not trusted for after-values, see below)
-5. Return diff JSON
+When no value changes the post, `form_page` answers `next: "no_change"` and `route_change` takes the run to `no_change_outcome` (op `unchanged`): the run completes with empty `changes`, no `error` and a `message` built from the request.
 
-**Do NOT add a "create draft revision" call.** There is no WordPress ability equivalent to Drupal's draft revision endpoint, and the agent must never call `ewpa/create-post` for this — that ability creates a NEW, unrelated post. The agent prompt explicitly forbids it, to prevent the LLM from attempting to fabricate a revision that doesn't exist.
+After the review, `read_reviewed_page` (op `read`) takes the revision the review's answer approves (`approved: true`, `review.decision` "approved", envelope version 1, exactly one target, on the artifact this run filed), never the revision this run filed: after a Regenerate the approved revision is a successor. It reads that revision through the host's artifact read port by its revision id, derives the excerpts again from its `writeFields` and the post as read, and answers the values only when they equal the excerpts the revision shows and the excerpts show every value it would save. Else `reviewed_change_unavailable`, and no site call is made.
 
-## MCP primitives used (cinatra-ai/cinatra#2022 S7 — generic invoker cutover)
-
-This agent has two WordPress MCP call primitives: the read tool `wordpress_site_tool_call` and the write tool `wordpress_site_tool_write` (plus `wordpress_site_tools_list`, declared optional, unused by the current flow). There are no `wordpress_post_*` named tools anymore — every WordPress call goes through `wordpress_site_tool_call({ instanceId, toolName, args })` (reads only; it refuses an ability that writes) or `wordpress_site_tool_write({ instanceId, toolName, args })` (writes; on an agent run each call waits for the person's recorded decision). Both forward `args` unmodified to the target site's own MCP ability and returns that ability's raw response (`{ success, data }`) unwrapped by nothing in between.
-
-| `toolName` | Purpose |
-|---|---|
-| `ewpa/get-post` | Read a post by id (`args: { post_id }`) — required for before/after diffs |
-| `ewpa/get-page` | Read a page by id (`args: { post_id }`) — used instead of `ewpa/get-post` only when `postType === "page"` |
-| `ewpa/update-post` | Via `wordpress_site_tool_write`. Update a post's top-level fields (`args: { post_id, title?, content?, excerpt?, status? }`) — supports `postType === "post"` (default) ONLY; there is no proven page-update or meta-update ability behind this cutover (see below). It has no argument for an expected change time or revision, so the update is unconditional |
-
-`ewpa/create-post` is forbidden by the agent prompt — never call it. Creating new posts is outside the scope of this agent.
-
-**Two capabilities this agent HAD before this cutover and does NOT have anymore, both inherited limitations from the connector-side retarget (wordpress-mcp-connector PR "feat/2022-s7-tau-review-gate", #97) rather than something this agent's own rewrite removes:**
-- **Page edits.** The old `wordpress_post_update` handler forwarded `postType` to the plugin's own ability, which supported pages. The community catalog's `ewpa/update-post` has no proven page-safe behavior (no captured schema/execution, no distinct page-update ability) — the connector's own retarget refuses it fail-closed, and this agent's prompt does the same (Rule 6 in `cinatra/oas.json`'s `edit.data.system`) since it no longer routes through that connector handler to inherit the refusal automatically.
-- **Meta-only writes.** `wordpress_post_update_meta` is gone from this agent's `consumes[]` (it was already dead per this repo's own AGENTS.md note before this cutover — the agent's SKILL/prompt never actually called it, only warned against misusing `wordpress_post_update` for meta).
+Plain text hides characters and white space, so one rule applies to each changed block (`checkedBlock`), at the form and at the read-back, byte for byte. A changed block that holds an invisible character (Unicode Cf, Cc except tab, line feed and carriage return, Zs except U+0020, Zl, Zp, default ignorable characters and variation selectors) in the post as read or in the value to save is refused. In the changed part of a block, white space may only be a single U+0020 between two visible characters. The compose step's instructions say so: a new or changed block is written on one line.
 
 ## Timeout
 
-The `wordpress_content_editor_run` MCP primitive uses `timeoutMs: 300_000` (5 minutes). The unified SSE gateway (`/api/agents/[agentSlug]/stream`) uses `timeoutMs: 600_000` at the A2A level. Do not reduce these without testing a full read → demote → update cycle.
+The `wordpress_content_editor_run` MCP primitive uses `timeoutMs: 300_000` (5 minutes). The unified SSE gateway (`/api/agents/[agentSlug]/stream`) uses `timeoutMs: 600_000` at the A2A level. A run waits for a person at the review and at the publish card.
 
 ## Local dev URL
 
