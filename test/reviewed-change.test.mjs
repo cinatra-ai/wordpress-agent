@@ -454,87 +454,145 @@ test("T16 the splitting stops at the block limit: a value of a million blocks cr
   );
   assert.equal(meter.blocks, limit + 1, `the splitting stopped at the limit, not after ${meter.blocks} blocks`);
   const under = { blocks: 0 };
-  excerptsOf(read, { title: null, content: "<p>One</p>\n\n<p>Two</p>", excerpt: null }, refuse, under);
+  // One plain space between the blocks: a content without block markup takes
+  // its line breaks as they are, and this case counts blocks, not white space.
+  excerptsOf(read, { title: null, content: "<p>One</p> <p>Two</p>", excerpt: null }, refuse, under);
   assert.equal(under.blocks, 2, "a value under the limit is split whole");
 });
 
-// --- invisible characters ------------------------------------------------------
+// --- invisible characters and white space ------------------------------------
+//
+// One rule per changed block, the unit the review shows. A changed block that
+// holds an invisible character, in the post as read or in the value to save,
+// is not changed by the agent at all. Between the unchanged start and end of a
+// changed block, every run of white space must be one plain space on both
+// sides (in the title, and in block content outside whitespace-sensitive
+// blocks, a run of ASCII white space counts as one space, as the page draws
+// it).
+//
+// Removed with the neighbour logic: the cases of the old T18 and T20 that
+// accepted an edit inside a block holding an invisible character ("words
+// changed on both sides of a zero-width space", "an edit elsewhere in the
+// block keeps the sequence"), the case of the old T19 that filed an added
+// no-break space (the display draws it as a plain space), and the verbs
+// "adds", "removes" and "moves" in the refusal. Such a block is now refused
+// whatever the edit, because an invisible move inside it cannot be told from
+// a kept character.
 
 const INVISIBLE_RE = /U\+[0-9A-F]{4,6}/;
-const refusedInvisible = (codePoint, verb, region = "content", code = FORM_CODE) => (err) =>
-  refusedWith(code)(err) && err.message.includes(`${verb} an invisible character ${codePoint} in the ${region}`);
+const refusedInvisible = (codePoint, region = "content", code = FORM_CODE) => (err) =>
+  refusedWith(code)(err) && err.message.includes(`of the ${region} holds the invisible character ${codePoint}`);
+const refusedSpace = (region = "content", code = FORM_CODE) => (err) =>
+  refusedWith(code)(err) && err.message.includes(`of the ${region} changes white space other than one plain space`) && !INVISIBLE_RE.test(err.message);
 const withContent = (content) => ({ title: null, content, excerpt: null });
+const para = (inner) => `<!-- wp:paragraph -->\n<p>${inner}</p>\n<!-- /wp:paragraph -->`;
+const pre = (inner) => `<!-- wp:preformatted -->\n<pre class="wp-block-preformatted">${inner}</pre>\n<!-- /wp:preformatted -->`;
 
 test("T17 a change that adds an invisible or direction-changing character is refused, naming its code point", async () => {
-  await assert.rejects(formOf({ title: null, content: null, excerpt: "\u200B" }, { ...READ, excerpt: "" }), refusedInvisible("U+200B", "adds", "excerpt"), "an empty excerpt to a zero-width space");
-  await assert.rejects(formOf(withContent("\u200B"), { ...READ, content: "" }), refusedInvisible("U+200B", "adds"), "an empty content to a zero-width space");
-  await assert.rejects(formOf(withContent(READ.content.replace("Friday", "Fri\u202Eday"))), refusedInvisible("U+202E", "adds"), "a direction override inside a visible word");
+  await assert.rejects(formOf({ title: null, content: null, excerpt: "\u200B" }, { ...READ, excerpt: "" }), refusedInvisible("U+200B", "excerpt"), "an empty excerpt to a zero-width space");
+  await assert.rejects(formOf(withContent("\u200B"), { ...READ, content: "" }), refusedInvisible("U+200B"), "an empty content to a zero-width space");
+  await assert.rejects(formOf(withContent(READ.content.replace("Friday", "Fri\u202Eday"))), refusedInvisible("U+202E"), "a direction override inside a visible word");
   const added = {
     "U+200D": "\u200D", "U+2060": "\u2060", "U+FEFF": "\uFEFF", "U+2066": "\u2066", "U+200E": "\u200E", "U+061C": "\u061C",
     "U+0007": "\u0007", "U+0085": "\u0085", "U+2009": "\u2009", "U+202F": "\u202F", "U+3000": "\u3000",
     "U+2028": "\u2028", "U+2029": "\u2029", "U+00AD": "\u00AD", "U+3164": "\u3164", "U+E0041": "\u{E0041}",
   };
   for (const [codePoint, ch] of Object.entries(added)) {
-    await assert.rejects(formOf(withContent(READ.content.replace("Friday", `Saturday${ch}`))), refusedInvisible(codePoint, "adds"), codePoint);
+    await assert.rejects(formOf(withContent(READ.content.replace("Friday", `Saturday${ch}`))), refusedInvisible(codePoint), codePoint);
   }
-  await assert.rejects(formOf({ title: "Opening\u200B hours", content: null, excerpt: null }), refusedInvisible("U+200B", "adds", "title"), "in the title");
-  await assert.rejects(formOf(withContent(READ.content.replace("Friday", "Fri\u200Bday"))), refusedInvisible("U+200B", "adds"), "inside an unchanged word, where the visible text is the same");
+  await assert.rejects(formOf({ title: "Opening\u200B hours", content: null, excerpt: null }), refusedInvisible("U+200B", "title"), "in the title");
+  await assert.rejects(formOf(withContent(READ.content.replace("Friday", "Fri\u200Bday"))), refusedInvisible("U+200B"), "inside an unchanged word, where the visible text is the same");
 });
 
-test("T18 a post that already holds invisible characters can be edited elsewhere and around them; removing one, or moving it off its visible neighbours, is refused", async () => {
+test("T18 a block that holds an invisible character is kept as it is: unchanged it passes, any change to it is refused", async () => {
   const { extensionTool } = await load();
-  const content = "<p>Open at 10\u00A0am</p>\n\n<p>See the in\u00ADformation desk.</p>\n\n<p>Ask at the desk\u200B.</p>\n\n<p>We open at nine.</p>";
+  const content = [para("See the in\u00ADformation desk."), para("Ask at the desk\u200B."), para("Families \u{1F468}\u200D\u{1F469}"), para("We open at nine.")].join("\n\n");
   const read = { ...READ, content };
-  const edits = {
-    "another block": content.replace("nine", "ten"),
-    "the same block as a soft hyphen": content.replace("desk.</p>", "counter.</p>"),
-    "words changed on both sides of a zero-width space": content.replace("Ask at the desk\u200B.", "Please ask at the front desk\u200B. Thank you."),
+  const after = content.replace("nine", "ten");
+  const form = await formOf(withContent(after), read);
+  assert.equal(form.writeFields.content, after, "an edit of another block is filed");
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
+  const result = await extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(content) }, ports });
+  assert.deepEqual(JSON.parse(result.reviewedFields), withContent(after), "and read back");
+  const refused = {
+    "words changed on both sides of a zero-width space": [content.replace("Ask at the desk\u200B.", "Please ask at the front desk\u200B. Thank you."), "U+200B"],
+    "removing a zero-width space": [content.replace("desk\u200B.", "desk."), "U+200B"],
+    "moving a zero-width space": [content.replace("desk\u200B.", "de\u200Bsk."), "U+200B"],
+    "a word changed beside a soft hyphen": [content.replace("desk.</p>", "counter.</p>"), "U+00AD"],
+    "removing a soft hyphen with its word": [content.replace("in\u00ADformation", "help"), "U+00AD"],
+    "a word changed beside a joined emoji": [content.replace("Families", "All families"), "U+200D"],
+    "a joiner removed": [content.replace("\u{1F468}\u200D\u{1F469}", "\u{1F468}\u{1F469}"), "U+200D"],
   };
-  for (const [name, after] of Object.entries(edits)) {
+  for (const [name, [value, codePoint]] of Object.entries(refused)) {
+    await assert.rejects(formOf(withContent(value), read), refusedInvisible(codePoint), name);
+  }
+});
+
+test("T19 an invisible character moved between two equal pairs while the words around it change is refused", async () => {
+  // The zero-width space leaves the first a/b pair and joins the second, and
+  // the visible text changes before, between and after: counting the runs by
+  // their visible neighbours made the move cancel out.
+  const cases = [
+    [para("Xa\u200Bb ab Y"), para("Za b a\u200Bb W")],
+    [para("One a\u200Bb two a b three"), para("Uno a b two a\u200Bb tres")],
+  ];
+  for (const [before, after] of cases) {
+    await assert.rejects(formOf(withContent(after), { ...READ, content: before }), refusedInvisible("U+200B"), after);
+  }
+});
+
+test("T20 white space: a line break lost inside pre beside a visible edit is refused; an ordinary edit is filed", async () => {
+  const { extensionTool } = await load();
+  const code = `${para("Intro.")}\n\n${pre("x = 1\ny = 2")}`;
+  const refused = {
+    "a line break removed beside a changed token": [code, code.replace("1\ny", "9 y")],
+    "two spaces added in pre beside a changed token": [code, code.replace("x = 1", "x  = 9")],
+    "a line break removed in a code block": ['<!-- wp:code -->\n<pre class="wp-block-code"><code>a = 1;\nb = 2;</code></pre>\n<!-- /wp:code -->', '<!-- wp:code -->\n<pre class="wp-block-code"><code>a = 1; c = 2;</code></pre>\n<!-- /wp:code -->'],
+    "a no-break space added with a word": [READ.content, READ.content.replace("Friday", "Friday,\u00A09\u00A0to\u00A05")],
+    "a line break added to classic content, which the site turns into a break": ["<p>We open\nat nine.</p>", "<p>We open\nat ten\nsharp.</p>"],
+  };
+  for (const [name, [before, after]] of Object.entries(refused)) {
+    await assert.rejects(formOf(withContent(after), { ...READ, content: before }), refusedSpace(), name);
+  }
+  await assert.rejects(
+    formOf({ title: null, content: null, excerpt: "Our\nopening hours." }),
+    refusedSpace("excerpt"),
+    "a line break in the excerpt, whose white space the tool takes as it is",
+  );
+  const filed = {
+    "a token changed inside pre, white space kept": [code, code.replace("y = 2", "y = 3")],
+    "a word added in a paragraph": [READ.content, READ.content.replace("Monday to Friday", "Monday to Friday and Sunday")],
+    "a paragraph block added": [READ.content, `${READ.content}\n\n${para("New.")}`],
+    "an edit away from a kept no-break space": [para("Open at 10\u00A0am daily."), para("Open at 10\u00A0am on weekdays.")],
+    "a word changed in classic content, white space kept": ["<p>We open\nat nine.</p>", "<p>We open\nat ten.</p>"],
+  };
+  for (const [name, [before, after]] of Object.entries(filed)) {
+    const read = { ...READ, content: before };
     const form = await formOf(withContent(after), read);
     assert.equal(form.writeFields.content, after, name);
     const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
-    const result = await extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(content) }, ports });
+    const result = await extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(before) }, ports });
     assert.deepEqual(JSON.parse(result.reviewedFields), withContent(after), `${name}, at the read-back`);
   }
-  const refused = {
-    "removing a zero-width space": [content.replace("desk\u200B.", "desk."), "U+200B", "removes"],
-    "moving a zero-width space inside unchanged words": [content.replace("desk\u200B.", "de\u200Bsk."), "U+200B", "adds"],
-    "moving a zero-width space by an edit next to it": [content.replace("desk\u200B.", "desks\u200B."), "U+200B", "moves"],
-    "removing a soft hyphen with its word": [content.replace("in\u00ADformation", "help"), "U+00AD", "removes"],
-  };
-  for (const [name, [after, codePoint, verb]] of Object.entries(refused)) {
-    await assert.rejects(formOf(withContent(after), read), refusedInvisible(codePoint, verb), name);
-  }
-});
-
-test("T19 a no-break space is taken as a space: added with a change of words it is filed; added alone it is a change of white space", async () => {
-  const after = READ.content.replace("Friday", "Friday,\u00A09\u00A0to\u00A05");
-  assert.equal((await formOf(withContent(after))).writeFields.content, after);
+  assert.equal((await formOf({ title: null, content: null, excerpt: "Our opening hours." })).excerpts.length, 1, "an excerpt edit with single spaces is filed");
   await assert.rejects(
     formOf(withContent(READ.content.replace("We are open", "We\u00A0are open"))),
     (err) => refusedWith(FORM_CODE)(err) && err.message.includes("only in white space") && !INVISIBLE_RE.test(err.message),
+    "a change of white space alone is refused as before",
   );
-});
-
-test("T20 removing a joiner from an emoji sequence changes what is drawn and is refused; so is replacing the sequence", async () => {
-  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
-  const read = { ...READ, content: `<p>Families welcome ${family}</p>` };
-  for (const [name, after] of [
-    ["a joiner removed", "<p>Families welcome \u{1F468}\u{1F469}\u200D\u{1F467}</p>"],
-    ["the sequence replaced", "<p>Families welcome \u{1F389}</p>"],
-  ]) {
-    await assert.rejects(formOf(withContent(after), read), refusedInvisible("U+200D", "removes"), name);
-  }
-  const form = await formOf(withContent(`<p>All families welcome ${family}</p>`), read);
-  assert.equal(form.excerpts.length, 1, "an edit elsewhere in the block keeps the sequence and is filed");
 });
 
 test("T21 the read-back applies the same rule to the approved revision", async () => {
   const { extensionTool } = await load();
   const after = READ.content.replace("Friday", "Saturday\u200B");
-  const shown = [{ region: "content", position: 1, kind: "paragraph", level: null, published: "<!-- wp:paragraph -->\n<p>We are open Monday to Friday.</p>\n<!-- /wp:paragraph -->\n\n", proposed: "<!-- wp:paragraph -->\n<p>We are open Monday to Saturday\u200B.</p>\n<!-- /wp:paragraph -->\n\n" }];
+  const shown = [{ region: "content", position: 4, kind: "paragraph", level: null, published: "<p>We are open Monday to Friday.</p>\n", proposed: "<p>We are open Monday to Saturday\u200B.</p>\n" }];
   const snapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: withContent(after), excerpts: shown });
   const { ports } = portsAnswering({ [FILED.representationRevisionId]: snapshot });
-  await assert.rejects(extensionTool({ input: readCall(answer([FILED])), ports }), refusedInvisible("U+200B", "adds", "content", READ_CODE));
+  await assert.rejects(extensionTool({ input: readCall(answer([FILED])), ports }), refusedInvisible("U+200B", "content", READ_CODE));
+  const before = pre("x = 1\ny = 2");
+  const changed = pre("x = 9 y = 2");
+  const preShown = [{ region: "content", position: 1, kind: "paragraph", level: null, published: '<pre class="wp-block-preformatted">x = 1\ny = 2</pre>\n', proposed: '<pre class="wp-block-preformatted">x = 9 y = 2</pre>\n' }];
+  const preSnapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: withContent(changed), excerpts: preShown });
+  const pre2 = portsAnswering({ [FILED.representationRevisionId]: preSnapshot });
+  await assert.rejects(extensionTool({ input: { ...readCall(answer([FILED])), content: JSON.stringify(before) }, ports: pre2.ports }), refusedSpace("content", READ_CODE));
 });

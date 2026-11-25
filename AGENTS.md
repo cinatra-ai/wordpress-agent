@@ -135,7 +135,22 @@ the rows of the publish card stay as they are.
 
 What the review cannot show: a change of white space alone (refused, see
 above), and the post as read is the read step's answer, so the unshown blocks
-equal that answer, not a second read of the site.
+equal that answer, not a second read of the site. Plain text also hides
+characters and white space, so one rule applies to each changed block
+(`checkedBlock`), at the form and at the read-back. A changed block that holds
+an invisible character (format and control characters, spaces other than
+U+0020 and U+00A0, line and paragraph separators, other default ignorable
+characters) in the post as read or in the value to save is refused: the agent
+does not change such a block, a person does it on the site; this freezes
+blocks with joined emoji, soft hyphens or direction marks. Between the
+unchanged start and end of a changed block, every run of white space must be
+one plain space on both sides; in the title and in a content of blocks
+(`<!-- wp:` markup on both sides), outside blocks holding `pre`, `textarea`,
+`code` or a `white-space` style, a run of ASCII white space counts as one space
+first, as the page draws it; the excerpt and a content without block markup
+(the site turns their line breaks into breaks) are taken byte for byte. So a
+line break, a tab, two spaces or a no-break space cannot change inside a shown
+change.
 
 ## Draft-revision workflow — CRITICAL asymmetry with Drupal
 
