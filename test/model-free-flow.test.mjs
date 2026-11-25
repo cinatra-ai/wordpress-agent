@@ -1099,6 +1099,19 @@ async function runToRead(postId) {
   return env;
 }
 
+test("F35 the connector edge requires 0.1.10 or later: the first connector version with the guarded read adapter", () => {
+  // wordpress-mcp-connector PR #121 (head 30a231b9) carries the adapter and declares version 0.1.10.
+  const edges = pkg.cinatra.dependencies.filter((dep) => dep.packageName === "@cinatra-ai/wordpress-mcp-connector");
+  assert.equal(edges.length, 1);
+  assert.deepEqual(edges[0], {
+    packageName: "@cinatra-ai/wordpress-mcp-connector",
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "^0.1.10" },
+    requirement: "required",
+    kind: "connector",
+  });
+});
+
 test("F33 every step after the check of the read takes the run's post id from it, never from the start", () => {
   for (const edge of oas.data_flow_connections) {
     if (edge.source_node.$component_ref !== "start" || edge.source_output !== "postId") continue;

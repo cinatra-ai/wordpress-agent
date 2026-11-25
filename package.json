@@ -20,7 +20,7 @@
         "edgeType": "runtime",
         "versionConstraint": {
           "kind": "semver-range",
-          "range": "^0.1.4"
+          "range": "^0.1.10"
         },
         "requirement": "required",
         "kind": "connector"

@@ -9,7 +9,7 @@ The flow reads and writes the site without a model: two of its steps call connec
 1. **The write: the host serves `wordpress_site_tool_write` to the publishing step `write_page` only under the run's released publish decision** (cinatra PR #4788, open; the connector declares the tool `passthroughStep: "publishing"`). The person's release on the publish card governs the write; the decision is used once.
 2. **The read: the host's guarded call of `wordpress_site_tool_call`** (cinatra#4796, open: the call is bound to the catalog row its caller checked, and a read-declared call runs only on a read-class entry) **and the connector's adapter that reads site tools through it** (wordpress-mcp-connector PR #121, open).
 3. **The site runs the cinatra plugin with the abilities `cinatra/post-read` and `cinatra/post-update-if-unchanged`** (cinatra-ai/wordpress-plugin PR #120, open). A site without them answers the read with an unknown tool, and the run fails at the read.
-4. **The connector dependency floor.** `package.json` requires `@cinatra-ai/wordpress-mcp-connector` `^0.1.4`, which admits connector versions without the guarded-read adapter (none released carries it). The floor is raised to the first connector version that carries the adapter, once wordpress-mcp-connector PR #121 merges with that version.
+4. **The connector dependency floor.** `package.json` requires `@cinatra-ai/wordpress-mcp-connector` `^0.1.10`, the first connector version with the guarded-read adapter (wordpress-mcp-connector PR #121, open). This pack therefore merges after that pull request, and is installed only with a connector at or above 0.1.10.
 
 ## Repair capability (cinatra-ai/cinatra#2286) — declared, but inert until cinatra core catches up
 
