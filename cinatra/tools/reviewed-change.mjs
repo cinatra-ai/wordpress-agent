@@ -29,6 +29,15 @@
  *   as read, and answers the values only when they equal the excerpts the
  *   revision shows and every value it would save is shown by them.
  *
+ * Every operation takes the read only when it is a successful read
+ * (`checkedRead`); any other read is refused and never ends the run as a
+ * change of nothing. The page record (the post id, the status, the title and
+ * the addresses) is built by code from that read (`pageOf`), never from the
+ * compose step's answer. What `form` files and the revision `read` takes both
+ * pass one check (`checkedSnapshot`): the display draws the snapshot, its
+ * excerpts have the form `form` builds, and its page record is the one built
+ * from this run's read.
+ *
  * Each operation refuses by the host's documented means: it throws an error
  * named `ExtensionToolCallRefusal` whose message is one sentence that starts
  * with its code (`page_form_unavailable` for `form` and `unchanged`,
@@ -364,6 +373,10 @@ export function excerptsOf(read, writeFields, refuse) {
 /** The values to save, as `title`, `content` and `excerpt`, each a non-empty string or null. */
 function writeFieldsOf(value, refuse) {
   if (!isPlainObject(value)) refuse("there are no values to save");
+  const other = Object.keys(value).filter((key) => !FIELDS.includes(key));
+  if (other.length > 0) {
+    refuse(`the values to save name ${other.map((key) => JSON.stringify(key)).join(", ")}, which this flow does not save: it saves only the title, the content and the excerpt, and never changes a status without a reviewed text`);
+  }
   const fields = {};
   for (const field of FIELDS) {
     const item = value[field];
@@ -379,7 +392,168 @@ const changedOf = (read, writeFields) =>
 
 const nothingChanges = (writeFields) => FIELDS.every((field) => writeFields[field] === null);
 
-const readOf = (call) => ({ title: readText(call.title), content: readText(call.content), excerpt: readText(call.excerpt) });
+// --- the read ----------------------------------------------------------------
+
+/** The statuses of a post this flow edits; a successful read answers one of them. */
+const READ_STATUSES = new Set(["publish", "draft", "pending", "private", "future"]);
+
+/** A text input as the flow renders it (JSON text of a string), or undefined when it is not one. */
+function textInput(value) {
+  if (typeof value !== "string") return undefined;
+  const parsed = parseJson(value);
+  return typeof parsed === "string" ? parsed : undefined;
+}
+
+/**
+ * THE READ, accepted only when it is a successful read. A successful read
+ * always carries: an error object whose `code` and `message` are both the
+ * empty text (the read step's contract for a successful read); a status this
+ * flow edits (`publish`, `draft`, `pending`, `private` or `future`; a trashed
+ * post, an automatic draft, a revision and any other text are refused); a
+ * non-empty change time; a title, a content, an excerpt and an address that
+ * are texts (each may be empty); and the run's post id, a whole number, which
+ * the read step answered too. Anything else is a failed read, whatever its
+ * shape: `{}`, `{ message }`, `null`, a text, a missing input and each flow
+ * default that stands in for one. A failed read is refused with its own
+ * message when it has one, else with a fixed one; it never leads to a filing,
+ * to the no-change outcome or to a write.
+ */
+function checkedRead(call, refuse) {
+  const error = readObject(call.error);
+  if (error === undefined || error.code !== "" || error.message !== "") {
+    const message = error !== undefined && typeof error.message === "string" ? error.message.trim() : "";
+    refuse(message !== "" ? `the read of the post failed: ${message}` : "no successful read of the post was handed to this step");
+  }
+  const postId = (textInput(call.postId) ?? "").trim();
+  if (!/^[1-9][0-9]*$/.test(postId)) refuse("the run names no post id that is a whole number");
+  if ((textInput(call.readPostId) ?? "").trim() !== postId) refuse("the read answered another post id than the run's post");
+  const status = (textInput(call.status) ?? "").trim();
+  if (!READ_STATUSES.has(status)) {
+    refuse(status === "" ? "the read answered no status, so it was not a successful read" : `the read answered the status ${JSON.stringify(status.slice(0, 40))}, which is not a status of a post this flow edits`);
+  }
+  if ((textInput(call.modified) ?? "").trim() === "") refuse("the read answered no change time, so it was not a successful read");
+  const texts = {};
+  for (const name of [...FIELDS, "address"]) {
+    texts[name] = textInput(call[name]);
+    if (texts[name] === undefined) refuse(`the read answered no ${name} text, so it was not a successful read`);
+  }
+  return { postId, status, title: texts.title, content: texts.content, excerpt: texts.excerpt, address: texts.address.trim() };
+}
+
+/** The address, when its text starts with `https://`, it parses, its protocol is https and it carries no user name or password; else null. */
+function httpsAddress(value) {
+  if (!/^https:\/\//i.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page record the snapshot files, built by code from this run's read only:
+ * the post id, the status, the title, the post's own address as the read
+ * answered it (null when empty) and the address that opens the post in the
+ * WordPress editor, on the origin of that address (null when the address is
+ * not an https address). No value of the compose step's answer reaches it.
+ */
+function pageOf(read) {
+  const url = httpsAddress(read.address);
+  return {
+    postId: read.postId,
+    status: read.status,
+    title: read.title,
+    address: read.address === "" ? null : read.address,
+    cmsAddress: url === null ? null : `${url.origin}/wp-admin/post.php?post=${read.postId}&action=edit`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE CHECK OF A PAGE SNAPSHOT, used by `form` on what it files and by
+// `read` on the approved revision.
+//
+// `displayReading` restates the rules by which the display's parser accepts a
+// snapshot (cinatra-ai/website-artifacts, src/cms-page-model.ts, parseCmsPage):
+// the marker and its version, at least one excerpt and at most 200, a system it
+// knows, a page record with a text title, and each excerpt with a region, a
+// whole position of 0 or more, a kind it draws, two text sides that do not hold
+// the same words, a heading level of 1 to 6 (2 when absent), and positions that
+// rise between consecutive excerpts of one region. It answers the parser's
+// reason. The parser reads only the title and the two addresses of the page
+// record, so the post id and the status beside them do not change its answer.
+// `checkedSnapshot` adds what this pack files: the WordPress system, each
+// excerpt with exactly the keys and the level form `excerptsOf` builds, and a
+// page record equal, key by key, to the one built from this run's read.
+// ---------------------------------------------------------------------------
+
+const DISPLAY_SYSTEMS = ["wordpress", "drupal"];
+const DISPLAY_KINDS = ["heading", "paragraph", "list-item"];
+const EXCERPT_KEYS = ["kind", "level", "position", "proposed", "published", "region"];
+const PAGE_PARTS = [
+  ["postId", "post id"],
+  ["status", "status"],
+  ["title", "title"],
+  ["address", "address"],
+  ["cmsAddress", "edit address"],
+];
+
+/** Whether the display's parser accepts one excerpt. */
+function displayDrawsExcerpt(value) {
+  if (!isPlainObject(value)) return false;
+  const { region, position, kind, level, published, proposed } = value;
+  if (typeof region !== "string" || region.length === 0) return false;
+  if (typeof position !== "number" || !Number.isInteger(position) || position < 0) return false;
+  if (typeof kind !== "string" || !DISPLAY_KINDS.includes(kind)) return false;
+  if (typeof published !== "string" || typeof proposed !== "string") return false;
+  if (sameWords(published, proposed)) return false;
+  if (kind === "heading" && level !== undefined && !(typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6)) {
+    return false;
+  }
+  return true;
+}
+
+/** The display parser's answer for a snapshot: `{ ok: true }` or `{ ok: false, reason }`, with its reasons. */
+export function displayReading(form) {
+  if (!isPlainObject(form) || !Object.prototype.hasOwnProperty.call(form, "cinatraCmsPage")) return { ok: false, reason: "not-the-form" };
+  if (form.cinatraCmsPage !== 1) return { ok: false, reason: "form-version" };
+  const { excerpts, system, page } = form;
+  if (excerpts === undefined || (Array.isArray(excerpts) && excerpts.length === 0)) return { ok: false, reason: "no-excerpts" };
+  if (typeof system !== "string" || !DISPLAY_SYSTEMS.includes(system)) return { ok: false, reason: "malformed" };
+  if (!isPlainObject(page) || typeof page.title !== "string") return { ok: false, reason: "malformed" };
+  if (!Array.isArray(excerpts) || excerpts.length > MAX_EXCERPTS) return { ok: false, reason: "malformed" };
+  let previous;
+  for (const entry of excerpts) {
+    if (!displayDrawsExcerpt(entry)) return { ok: false, reason: "malformed" };
+    if (previous !== undefined && previous.region === entry.region && entry.position <= previous.position) {
+      return { ok: false, reason: "malformed" };
+    }
+    previous = entry;
+  }
+  return { ok: true };
+}
+
+/** THE ONE CHECK: refuses, naming the part that differs, unless the snapshot is one the display draws of this run's post. */
+export function checkedSnapshot(form, page, refuse) {
+  if (isPlainObject(form) && !isPlainObject(form.page)) refuse("the page snapshot carries no page record");
+  const reading = displayReading(form);
+  if (!reading.ok) refuse(`the page snapshot is not one the page display draws (${reading.reason})`);
+  if (form.system !== "wordpress") refuse("the page snapshot is not a WordPress page snapshot");
+  const keys = Object.keys(form.page).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(PAGE_PARTS.map(([key]) => key).sort())) {
+    refuse("the page record of the page snapshot holds other keys than the post id, status, title, address and edit address");
+  }
+  for (const [key, name] of PAGE_PARTS) {
+    if (form.page[key] !== page[key]) refuse(`the page record of the page snapshot names another ${name} than this run's read of the post`);
+  }
+  for (const entry of form.excerpts) {
+    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(EXCERPT_KEYS)) {
+      refuse("a changed block of the page snapshot holds other keys than the ones the page snapshot form builds");
+    }
+    const levelOk = entry.kind === "heading" ? Number.isInteger(entry.level) : entry.level === null;
+    if (!levelOk) refuse("a changed block of the page snapshot has a level that is not the form the page snapshot builds");
+  }
+}
 
 // --- form ------------------------------------------------------------------
 
@@ -387,24 +561,17 @@ function form(call) {
   const refuse = (cause) => {
     throw new Refusal(FORM_CODE, cause);
   };
+  const read = checkedRead(call, refuse);
   const composed = readObject(call.pageForm);
   if (composed === undefined) refuse("the compose step answered no page form");
-  const read = readOf(call);
   const writeFields = changedOf(read, writeFieldsOf(composed.writeFields, refuse));
-  const page = isPlainObject(composed.page) ? composed.page : {};
-  const address = (value) => (isNonBlank(value) ? value : null);
-  const unchanged = nothingChanges(writeFields);
-  return {
-    ok: true,
-    next: unchanged ? "no_change" : "review",
-    pageForm: {
-      cinatraCmsPage: 1,
-      system: "wordpress",
-      page: { title: read.title, address: address(page.address), cmsAddress: address(page.cmsAddress) },
-      writeFields,
-      excerpts: unchanged ? [] : excerptsOf(read, writeFields, refuse),
-    },
-  };
+  if (nothingChanges(writeFields)) {
+    return { ok: true, next: "no_change", pageForm: {} };
+  }
+  const page = pageOf(read);
+  const pageForm = { cinatraCmsPage: 1, system: "wordpress", page, writeFields, excerpts: excerptsOf(read, writeFields, refuse) };
+  checkedSnapshot(pageForm, page, refuse);
+  return { ok: true, next: "review", pageForm };
 }
 
 // --- unchanged ---------------------------------------------------------------
@@ -414,18 +581,14 @@ function unchanged(call) {
   const refuse = (cause) => {
     throw new Refusal(FORM_CODE, cause);
   };
-  const error = readObject(call.error);
-  if (error === undefined || (typeof error.code === "string" ? error.code.trim() !== "" : error.code !== undefined)) {
-    refuse("the read failed, so nothing is known to need no change");
-  }
-  if (readText(call.status).trim() === "") refuse("the read answered no status, so nothing is known to need no change");
+  const read = checkedRead(call, refuse);
   const composed = readObject(call.pageForm);
   if (composed === undefined) refuse("the compose step answered no page form");
-  const writeFields = changedOf(readOf(call), writeFieldsOf(composed.writeFields, refuse));
+  const writeFields = changedOf(read, writeFieldsOf(composed.writeFields, refuse));
   if (!nothingChanges(writeFields)) refuse("the values to save change the post, which needs the review");
   return {
     ok: true,
-    postId: readText(call.postId).trim(),
+    postId: read.postId,
     instanceId: readText(call.instanceId).trim(),
     proposalId: "",
     changeSetId: "",
@@ -465,6 +628,7 @@ async function read(call, ports) {
   };
   const artifactId = readText(call.artifactId).trim();
   if (artifactId === "") refuse("the run filed no page snapshot");
+  const post = checkedRead(call, refuse);
   const revisionId = approvedRevision(readText(call.reviewAnswer), artifactId, refuse);
   let result;
   try {
@@ -483,7 +647,8 @@ async function read(call, ports) {
   }
   const writeFields = writeFieldsOf(snapshot.writeFields, refuse);
   if (nothingChanges(writeFields)) refuse("the reviewed revision holds no values to save");
-  const derived = excerptsOf(readOf(call), writeFields, refuse);
+  checkedSnapshot(snapshot, pageOf(post), refuse);
+  const derived = excerptsOf(post, writeFields, refuse);
   const regions = new Set(derived.map((e) => e.region));
   for (const field of FIELDS) {
     if (writeFields[field] !== null && !regions.has(field)) {

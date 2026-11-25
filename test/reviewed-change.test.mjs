@@ -51,7 +51,10 @@ const READ = {
     '<!-- wp:heading -->\n<h2>When we are open</h2>\n<!-- /wp:heading -->\n\n<!-- wp:paragraph -->\n<p>We are open Monday to Friday.</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p>See <a href="https://example.org/old">the map</a>.</p>\n<!-- /wp:paragraph -->',
   excerpt: "Our hours.",
 };
-const PAGE = { title: "Opening hours", address: "https://example.org/opening-hours/", cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit" };
+/** The rest of a successful read: the run's post id, the read's, its status, change time, address and error. */
+const READ_STATE = { postId: "42", status: "publish", modified: "2026-11-20 10:00:00", address: "https://example.org/opening-hours/", error: { code: "", message: "" } };
+/** The page record the tool builds from that read. */
+const PAGE = { postId: "42", status: "publish", title: "Opening hours", address: "https://example.org/opening-hours/", cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit" };
 const FILED_FIELDS = { title: "Opening hours and holidays", content: READ.content.replace("Monday to Friday", "Monday to Saturday"), excerpt: null };
 const SUCCESSOR_FIELDS = { title: null, content: READ.content.replace("https://example.org/old", "https://example.org/new"), excerpt: null };
 
@@ -68,15 +71,21 @@ const load = () => import("../cinatra/tools/reviewed-change.mjs");
 
 /** The values the flow sends, each as JSON text. */
 const readInputs = (read = READ) => ({
+  postId: JSON.stringify(READ_STATE.postId),
+  readPostId: JSON.stringify(READ_STATE.postId),
   title: JSON.stringify(read.title),
   content: JSON.stringify(read.content),
   excerpt: JSON.stringify(read.excerpt),
+  status: JSON.stringify(READ_STATE.status),
+  modified: JSON.stringify(READ_STATE.modified),
+  address: JSON.stringify(READ_STATE.address),
+  error: JSON.stringify(READ_STATE.error),
 });
 
 async function formOf(writeFields, read = READ, extra = {}) {
   const { extensionTool } = await load();
   const result = await extensionTool({
-    input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields, ...extra }), ...readInputs(read) },
+    input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", writeFields, ...extra }), ...readInputs(read) },
     ports: {},
   });
   return result.pageForm;
@@ -338,7 +347,8 @@ test("T14 a change whose compared part is too large is refused, at the form and 
   const after = manyBlocks(5000, ends);
   const tooLarge = (code) => (err) => refusedWith(code)(err) && err.message.includes("more blocks than the page snapshot form can compare");
   await assert.rejects(formOf({ title: null, content: after, excerpt: null }, { ...READ, content: before }), tooLarge(FORM_CODE));
-  const snapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: { title: null, content: after, excerpt: null }, excerpts: [] });
+  const shown = [{ region: "content", position: 0, kind: "paragraph", level: null, published: "<p>Block 0.</p>", proposed: "<p>Block 0, changed.</p>" }];
+  const snapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: { title: null, content: after, excerpt: null }, excerpts: shown });
   const { ports } = portsAnswering({ [FILED.representationRevisionId]: snapshot });
   const call = { ...readCall(answer([FILED])), content: JSON.stringify(before) };
   await assert.rejects(extensionTool({ input: call, ports }), tooLarge(READ_CODE));
@@ -377,7 +387,8 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   assert.equal("publishes" in node.metadata.cinatra, false);
   for (const word of ["wordpress_site_tool", "ewpa/"]) assert.equal(JSON.stringify(node).includes(word), false, `the no-change step names no ${word}`);
   assert.deepEqual(sourcesOf(NO_CHANGE, "pageForm"), [["compose_change", "pageForm"]]);
-  for (const field of ["title", "content", "excerpt", "status", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["read_page", field]]);
+  for (const field of ["title", "content", "excerpt", "status", "modified", "address", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["read_page", field]]);
+  assert.deepEqual(sourcesOf(NO_CHANGE, "postId"), [["start", "postId"]]);
   for (const input of ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"]) {
     assert.deepEqual(sourcesOf("emit_output", input), [["edit", input], [NO_CHANGE, input]], `the output's ${input} comes from the one step that ran`);
     assert.deepEqual(sourcesOf("end", input), [["edit", input], [NO_CHANGE, input]], `the end's ${input} comes from the one step that ran`);
@@ -386,7 +397,7 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   const { extensionTool } = await load();
   const nothing = { title: null, content: null, excerpt: null };
   const route = async (writeFields) =>
-    (await extensionTool({ input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields }), ...readInputs() }, ports: {} })).next;
+    (await extensionTool({ input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", writeFields }), ...readInputs() }, ports: {} })).next;
   assert.equal(await route(nothing), "no_change", "no values");
   assert.equal(await route({ title: READ.title, content: READ.content, excerpt: READ.excerpt }), "no_change", "values equal to the post as read");
   assert.equal(await route(FILED_FIELDS), "review", "a change is reviewed");
@@ -394,7 +405,7 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   const ok = JSON.stringify({ code: "", message: "" });
   const unchanged = (writeFields, over = {}) =>
     extensionTool({
-      input: { op: "unchanged", postId: JSON.stringify("42"), instanceId: JSON.stringify("site-1"), pageForm: JSON.stringify({ writeFields }), status: JSON.stringify("publish"), error: ok, ...readInputs(), ...over },
+      input: { op: "unchanged", instanceId: JSON.stringify("site-1"), pageForm: JSON.stringify({ writeFields }), ...readInputs(), status: JSON.stringify("publish"), error: ok, ...over },
       ports: {},
     });
   const outcome = { ok: true, postId: "42", instanceId: "site-1", proposalId: "", changeSetId: "", changes: [], error: {} };

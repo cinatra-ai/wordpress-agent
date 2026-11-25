@@ -90,10 +90,15 @@ const assertBridgeNode = (id) => {
   return node;
 };
 
-// A COPY, as plain JavaScript, of `framableAddress` and `parseCmsPage` from
-// src/cms-page-model.ts of @cinatra-ai/cms-snapshot-artifact at commit
-// 1fc58a05c93c4d1c431110b00f18dbdf9a9d4216 — the display's own reading of the
-// form this flow files.
+// ---------------------------------------------------------------------------
+// A COPY of the display's form reader, as plain JavaScript, from
+// cinatra-ai/website-artifacts src/cms-page-model.ts (the file as last changed
+// at 86aeea92f768c85acceeed67e8e5af9dae334c23, unchanged at 26763267):
+// framableAddress, frameAddress and parseCmsPage with the helpers they call,
+// line for line with the types removed. The pack's own restatement of the
+// parser's rules (`displayReading` in cinatra/tools/reviewed-change.mjs) is
+// compared with this copy below (S3b).
+// ---------------------------------------------------------------------------
 const CMS_PAGE_FORM_MARKER = "cinatraCmsPage";
 const CMS_PAGE_FORM_VERSION = 1;
 const CMS_PAGE_MAX_EXCERPTS = 200;
@@ -104,8 +109,10 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const HTTPS_TEXT = /^https:\/\//i;
+
 function framableAddress(value) {
-  if (typeof value !== "string" || value.length === 0) return null;
+  if (typeof value !== "string" || !HTTPS_TEXT.test(value)) return null;
   let url;
   try {
     url = new URL(value);
@@ -116,6 +123,32 @@ function framableAddress(value) {
   return value;
 }
 
+const LOCAL_NAMES = ["localhost", "local", "internal"];
+
+function frameAddress(value) {
+  const admitted = framableAddress(value);
+  if (admitted === null) return null;
+  let url;
+  try {
+    url = new URL(admitted);
+  } catch {
+    return null;
+  }
+  if (url.port !== "") return null;
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host.startsWith("[")) return null;
+  const labels = host.split(".");
+  if (labels.length < 2 || labels.some((label) => label === "")) return null;
+  const top = labels[labels.length - 1];
+  if (/^[0-9]+$/.test(top) || LOCAL_NAMES.includes(top)) return null;
+  if (host === "home.arpa" || host.endsWith(".home.arpa")) return null;
+  return admitted;
+}
+
+function sameWords(a, b) {
+  return a.trim().split(/\s+/).join(" ") === b.trim().split(/\s+/).join(" ");
+}
+
 function parseExcerpt(value) {
   if (!isRecord(value)) return null;
   const { region, position, kind, level, published, proposed } = value;
@@ -123,6 +156,8 @@ function parseExcerpt(value) {
   if (typeof position !== "number" || !Number.isInteger(position) || position < 0) return null;
   if (typeof kind !== "string" || !KINDS.includes(kind)) return null;
   if (typeof published !== "string" || typeof proposed !== "string") return null;
+  // A block whose two sides hold the same words, whitespace aside, is no change.
+  if (sameWords(published, proposed)) return null;
   let headingLevel = null;
   if (kind === "heading") {
     if (level === undefined) headingLevel = 2;
@@ -157,6 +192,10 @@ function parseCmsPage(text) {
   for (const entry of excerpts) {
     const excerpt = parseExcerpt(entry);
     if (excerpt === null) return { ok: false, reason: "malformed" };
+    const previous = parsed[parsed.length - 1];
+    if (previous !== undefined && previous.region === excerpt.region && excerpt.position <= previous.position) {
+      return { ok: false, reason: "malformed" };
+    }
     parsed.push(excerpt);
   }
 
@@ -166,7 +205,7 @@ function parseCmsPage(text) {
       system,
       page: {
         title: page.title,
-        address: framableAddress(page.address),
+        address: frameAddress(page.address),
         cmsAddress: framableAddress(page.cmsAddress),
       },
       readAt: typeof value.readAt === "string" ? value.readAt : null,
@@ -175,8 +214,8 @@ function parseCmsPage(text) {
   };
 }
 
-// The display's WordPress fixture form, copied from tests/cms-page-fixture.ts
-// (lines 9-57) of the same package at the same commit.
+// The display's WordPress fixture form, as tests/cms-page-fixture.ts of the
+// same package at the same commit builds it (WORDPRESS_FORM).
 const WORDPRESS_FIXTURE_FORM = {
   cinatraCmsPage: 1,
   system: "wordpress",
@@ -269,12 +308,12 @@ test("S3: the compose step answers the values to save, and the filed form shows 
   const form = find(node.outputs, "pageForm");
   assert.equal(form.type, "object");
   const formMembers = members(form);
-  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "page", "system", "writeFields"], "the compose step answers no excerpts");
+  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "system", "writeFields"], "the compose step answers no excerpts and no page record");
   assert.deepEqual(Object.keys(members(formMembers.writeFields)).sort(), ["content", "excerpt", "title"]);
   for (const field of ["content", "excerpt", "title"])
     assert.deepEqual(members(formMembers.writeFields)[field], { type: ["string", "null"] }, `writeFields.${field} is a string or null`);
-  assert.deepEqual(Object.keys(members(formMembers.page)).sort(), ["address", "cmsAddress", "title"]);
   const filed = members(find(parts.file_page.inputs, "pageForm"));
+  assert.deepEqual(Object.keys(members(filed.page)).sort(), ["address", "cmsAddress", "postId", "status", "title"]);
   assert.deepEqual(
     Object.keys(members(items(filed.excerpts))).sort(),
     ["kind", "level", "position", "proposed", "published", "region"],
@@ -308,15 +347,26 @@ test("S3: the compose step answers the values to save, and the filed form shows 
     input: {
       op: "form",
       pageForm: JSON.stringify(exampleForm),
+      postId: JSON.stringify("42"),
+      readPostId: JSON.stringify("42"),
       title: JSON.stringify(read.title),
       content: JSON.stringify(read.content),
       excerpt: JSON.stringify(read.excerpt),
+      status: JSON.stringify("publish"),
+      modified: JSON.stringify("2026-11-20 10:00:00"),
+      address: JSON.stringify("https://example.org/opening-hours/"),
+      error: JSON.stringify({ code: "", message: "" }),
     },
     ports: {},
   });
   const example = parseCmsPage(JSON.stringify(pageForm));
   assert.equal(example.ok, true, `the derived form parses: ${JSON.stringify(example)}`);
   assert.equal(example.page.system, "wordpress");
+  assert.deepEqual(example.page.page, {
+    title: "Opening hours",
+    address: "https://example.org/opening-hours/",
+    cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit",
+  }, "the display draws the addresses built from the read");
   assert.deepEqual(pageForm.writeFields, exampleForm.writeFields, "the filed values are the composed values");
   assert.deepEqual(pageForm.excerpts.map((e) => e.region), ["title", "content", "content"]);
   assert.equal(pageForm.excerpts[0].proposed, exampleForm.writeFields.title, "the shown title is the saved title");
@@ -330,6 +380,60 @@ test("S3: the compose step answers the values to save, and the filed form shows 
   const fixture = parseCmsPage(JSON.stringify(WORDPRESS_FIXTURE_FORM));
   assert.equal(fixture.ok, true, "the display's WordPress fixture form parses under the same copy");
   assert.equal(fixture.page.system, "wordpress");
+});
+
+// The pack restates the parser's rules in `displayReading`, which the form
+// step and the read-back apply through one check. Its answer equals the copy's
+// on the fixture, on a built form and on each rule the parser applies.
+test("S3b: the pack's restatement of the display's parser answers what the parser answers", async () => {
+  const { displayReading } = await import("../cinatra/tools/reviewed-change.mjs");
+  const base = WORDPRESS_FIXTURE_FORM;
+  const [heading, paragraph] = base.excerpts;
+  const cases = {
+    "the fixture": base,
+    "not an object": "x",
+    "null": null,
+    "a list": [base],
+    "no marker": { ...base, cinatraCmsPage: undefined },
+    "another version": { ...base, cinatraCmsPage: 2 },
+    "the version as text": { ...base, cinatraCmsPage: "1" },
+    "no excerpts": { ...base, excerpts: undefined },
+    "an empty list of excerpts": { ...base, excerpts: [] },
+    "excerpts that are not a list": { ...base, excerpts: "x" },
+    "201 excerpts": { ...base, excerpts: Array.from({ length: 201 }, (_, i) => ({ ...paragraph, position: i })) },
+    "200 excerpts": { ...base, excerpts: Array.from({ length: 200 }, (_, i) => ({ ...paragraph, position: i })) },
+    "another system": { ...base, system: "joomla" },
+    "no system": { ...base, system: undefined },
+    "no page record": { ...base, page: undefined },
+    "a page record that is a list": { ...base, page: [] },
+    "a title that is not text": { ...base, page: { ...base.page, title: 3 } },
+    "an empty title": { ...base, page: { ...base.page, title: "" } },
+    "extra keys in the page record": { ...base, page: { ...base.page, postId: "42", status: "draft" } },
+    "addresses the display refuses": { ...base, page: { ...base.page, address: "http://x", cmsAddress: "javascript:x" } },
+    "no region": { ...base, excerpts: [{ ...paragraph, region: "" }] },
+    "a region that is not text": { ...base, excerpts: [{ ...paragraph, region: 1 }] },
+    "a negative position": { ...base, excerpts: [{ ...paragraph, position: -1 }] },
+    "a fractional position": { ...base, excerpts: [{ ...paragraph, position: 0.5 }] },
+    "a position as text": { ...base, excerpts: [{ ...paragraph, position: "1" }] },
+    "another kind": { ...base, excerpts: [{ ...paragraph, kind: "quote" }] },
+    "a side that is not text": { ...base, excerpts: [{ ...paragraph, published: null }] },
+    "the same words": { ...base, excerpts: [{ ...paragraph, proposed: ` ${paragraph.published}  ` }] },
+    "a heading without a level": { ...base, excerpts: [{ ...heading, level: undefined }] },
+    "a heading level 0": { ...base, excerpts: [{ ...heading, level: 0 }] },
+    "a heading level 7": { ...base, excerpts: [{ ...heading, level: 7 }] },
+    "a heading level null": { ...base, excerpts: [{ ...heading, level: null }] },
+    "a heading level as text": { ...base, excerpts: [{ ...heading, level: "1" }] },
+    "a level on a paragraph": { ...base, excerpts: [{ ...paragraph, level: 9 }] },
+    "an entry that is not an object": { ...base, excerpts: ["x"] },
+    "positions that do not rise": { ...base, excerpts: [paragraph, { ...paragraph, position: 1 }] },
+    "equal positions in one region": { ...base, excerpts: [paragraph, { ...paragraph }] },
+    "equal positions in two regions": { ...base, excerpts: [paragraph, { ...paragraph, region: "excerpt" }] },
+  };
+  for (const [name, form] of Object.entries(cases)) {
+    const copy = parseCmsPage(JSON.stringify(form));
+    const pack = displayReading(JSON.parse(JSON.stringify(form) ?? "null"));
+    assert.deepEqual(pack, copy.ok ? { ok: true } : { ok: false, reason: copy.reason }, name);
+  }
 });
 
 test("S4: the filing step files the page snapshot, and the manifest declares what the flow produces", () => {
