@@ -57,6 +57,8 @@ const REFUSAL_CODES = [
   "post_locked",
   "unsupported_status",
   "invalid",
+  "empty_content",
+  "transaction_conflict",
   "not_found",
   "unsupported_storage",
   "db_error",
@@ -469,6 +471,121 @@ test("F16 an answer that is neither a save nor a known refusal fails the run and
   for (const answer of [{}, { success: false, code: "other" }, { success: "true" }, saved({ post_id: 43 }), saved({ post_content: 7 })]) {
     await assert.rejects(extensionTool({ input: outcomeCall(answer), ports: {} }), refusedWith("write_answer_unreadable"), JSON.stringify(answer).slice(0, 60));
   }
+});
+
+// Every code the site ability `cinatra/post-update-if-unchanged` answers, as its
+// documentation lists them (cinatra-ai/wordpress-plugin, "Content abilities" in
+// docs/advanced-and-reference.md, and the refusals of cinatra.php), read at PR #120
+// head 6601dc2cbc76c5a2886ef78e10bde49c5cbcbf1c. When the plugin documents another
+// code, add it here: the test below then fails until the pack maps it explicitly.
+const PLUGIN_REFUSAL_CODES = [
+  "post_changed",
+  "site_policy_conflict",
+  "post_locked",
+  "unsupported_status",
+  "permission_unverified",
+  "transaction_conflict",
+  "empty_content",
+  "invalid",
+  "not_found",
+  "unsupported_storage",
+  "db_error",
+  "write_outcome_unknown",
+];
+
+test("F16a every code the plugin documents has an explicit outcome in the pack, and the pack maps no other code", async () => {
+  const { WRITE_REFUSALS, OUTCOME_UNKNOWN_CODE } = await load();
+  const explicit = new Set([...Object.keys(WRITE_REFUSALS), "post_changed", OUTCOME_UNKNOWN_CODE]);
+  for (const code of PLUGIN_REFUSAL_CODES) assert.ok(explicit.has(code), `the plugin's ${code} has no explicit outcome in the pack`);
+  for (const code of explicit) assert.ok(PLUGIN_REFUSAL_CODES.includes(code), `the pack maps ${code}, which the plugin does not document`);
+  assert.equal(OUTCOME_UNKNOWN_CODE, "write_outcome_unknown");
+  assert.deepEqual([...REFUSAL_CODES].sort(), Object.keys(WRITE_REFUSALS).sort(), "the flow routes exactly the codes of WRITE_REFUSALS");
+});
+
+test("F16b one case per refusal code: nothing written, its own message, the branch of its code, no site text", async () => {
+  const { extensionTool } = await load();
+  const answers = {
+    empty_content: { data: { current_modified_gmt: "2026-11-20 10:06:00" } },
+    transaction_conflict: { data: { current_modified_gmt: null, cause: "open_transaction" } },
+  };
+  for (const [code, extra] of Object.entries(answers)) {
+    const out = await extensionTool({ input: outcomeCall({ success: false, code, message: "site text", ...extra }), ports: {} });
+    assert.equal(out.next, code);
+    assert.equal(out.error.code, code);
+    assert.equal(out.error.message, out.message);
+    assert.match(out.message, /^Nothing was written: /);
+    assert.equal(out.message.includes("site text"), false);
+    assert.equal(out.message.includes("outdated copy"), false, "no cache sentence without the flag");
+    assert.deepEqual(out.changes, []);
+  }
+  const empty = await extensionTool({ input: outcomeCall({ success: false, code: "empty_content", message: "m", data: {} }), ports: {} });
+  assert.match(empty.message, /left the post empty/);
+  const busy = await extensionTool({ input: outcomeCall({ success: false, code: "transaction_conflict", message: "m", data: { cause: "nested" } }), ports: {} });
+  assert.match(busy.message, /Try again later/);
+});
+
+test("F16c data.cache_stale true on a refusal adds one sentence, for every refusal that ends the run and for post_changed; other values add none", async () => {
+  const { extensionTool } = await load();
+  const note = "The site may still show an outdated copy of the post for a while.";
+  for (const code of REFUSAL_CODES) {
+    const plain = await extensionTool({ input: outcomeCall({ success: false, code, message: "m", data: {} }), ports: {} });
+    const stale = await extensionTool({ input: outcomeCall({ success: false, code, message: "m", data: { cache_stale: true } }), ports: {} });
+    assert.equal(stale.message, `${plain.message} ${note}`, `${code}: the cache sentence follows the message`);
+    assert.equal(stale.error.message, stale.message);
+    for (const flag of [false, "true", 1, null]) {
+      const other = await extensionTool({ input: outcomeCall({ success: false, code, message: "m", data: { cache_stale: flag } }), ports: {} });
+      assert.equal(other.message, plain.message, `${code}: ${JSON.stringify(flag)} adds no sentence`);
+    }
+  }
+  const changed = await extensionTool({ input: outcomeCall({ success: false, code: "post_changed", message: "m", data: { changed: ["post_content"], cache_stale: true } }), ports: {} });
+  assert.equal(changed.next, "post_changed");
+  assert.ok(changed.reviewNotice.endsWith(` ${note}`));
+  const none = await extensionTool({ input: outcomeCall({ success: false, code: "post_changed", message: "m", data: { changed: ["post_content"] } }), ports: {} });
+  assert.equal(none.reviewNotice.includes("outdated copy"), false);
+});
+
+test("F16d write_outcome_unknown fails the run with its own code and never says nothing was written; it takes no branch of route_write", async () => {
+  const { extensionTool } = await load();
+  assert.equal(parts[ROUTE_STEP].branches.includes("write_outcome_unknown"), false, "the run fails at write_outcome; route_write never sees it");
+  assert.equal(
+    controlFrom(ROUTE_STEP).some((e) => e.from_branch === "write_outcome_unknown"),
+    false,
+  );
+  for (const cause of ["unreadable", "differs", undefined, "other"]) {
+    const data = cause === undefined ? {} : { cause };
+    await assert.rejects(extensionTool({ input: outcomeCall({ success: false, code: "write_outcome_unknown", message: "site text", data }), ports: {} }), (err) => {
+      assert.ok(refusedWith("write_outcome_unknown")(err), err.message);
+      assert.match(err.message, /did not confirm whether the change was stored/);
+      assert.match(err.message, /check the post on the site before trying again\.$/);
+      assert.equal(/nothing was written/i.test(err.message), false, "it never says nothing was written");
+      assert.equal(err.message.includes("site text"), false);
+      assert.equal(err.message.includes("outdated copy"), false);
+      return true;
+    }, String(cause));
+  }
+  const messageOf = async (data) => {
+    try {
+      await extensionTool({ input: outcomeCall({ success: false, code: "write_outcome_unknown", message: "m", data }), ports: {} });
+    } catch (err) {
+      return err.message;
+    }
+    throw new Error("no refusal");
+  };
+  assert.match(await messageOf({ cause: "unreadable" }), /could not be read back/);
+  assert.match(await messageOf({ cause: "differs" }), /may have been stored/);
+  assert.notEqual(await messageOf({ cause: "unreadable" }), await messageOf({ cause: "differs" }));
+  assert.match(await messageOf({ cause: "unreadable", cache_stale: true }), /may still show an outdated copy of the post/);
+  assert.notEqual(await messageOf({ cause: "unreadable" }), "write_answer_unreadable", "its code is its own");
+});
+
+test("F16e data.commit_unacknowledged true on a save leaves the success as it is: same changes, message and no error", async () => {
+  const { extensionTool } = await load();
+  const plain = await extensionTool({ input: outcomeCall(saved({ data: { commit_unacknowledged: false, cache_stale: false } })), ports: {} });
+  const unacknowledged = await extensionTool({ input: outcomeCall(saved({ data: { commit_unacknowledged: true, cache_stale: false } })), ports: {} });
+  assert.equal(unacknowledged.next, "written");
+  assert.deepEqual(unacknowledged, plain);
+  assert.deepEqual(unacknowledged.error, {});
+  assert.equal(/unacknowledged|confirm/i.test(unacknowledged.message), false);
 });
 
 test("F17 the read-back answers the reviewed values one by one and the reviewed revision as the card's list", () => {

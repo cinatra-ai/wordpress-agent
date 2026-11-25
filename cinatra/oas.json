@@ -380,6 +380,28 @@
     },
     {
       "component_type": "ControlFlowEdge",
+      "name": "route_write_empty_content_to_emit_output",
+      "from_node": {
+        "$component_ref": "route_write"
+      },
+      "from_branch": "empty_content",
+      "to_node": {
+        "$component_ref": "emit_output"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "route_write_transaction_conflict_to_emit_output",
+      "from_node": {
+        "$component_ref": "route_write"
+      },
+      "from_branch": "transaction_conflict",
+      "to_node": {
+        "$component_ref": "emit_output"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
       "name": "route_write_default_to_emit_output",
       "from_node": {
         "$component_ref": "route_write"
@@ -3886,7 +3908,7 @@
           "riskClass": "read_only",
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
-          "description": "The agent reads the site's answer to the save by code and builds the run's output: on a save, each saved field with its value before and the value the site stored; on post_changed, the way back to the read and a notice for the next review; on any other refusal, its code and a plain message. An answer that is neither ends the run with the advice to check the post on the site."
+          "description": "The agent reads the site's answer to the save by code and builds the run's output: on a save, each saved field with its value before and the value the site stored; on post_changed, the way back to the read and a notice for the next review; on any other refusal, its code and a plain message (nothing was written). When the site did not confirm whether the save was stored (write_outcome_unknown), or its answer is neither a save nor a refusal, the run fails with the advice to check the post on the site before trying again."
         }
       }
     },
@@ -3916,6 +3938,8 @@
         "post_locked",
         "unsupported_status",
         "invalid",
+        "empty_content",
+        "transaction_conflict",
         "not_found",
         "unsupported_storage",
         "db_error"
@@ -3928,6 +3952,8 @@
         "post_locked": "post_locked",
         "unsupported_status": "unsupported_status",
         "invalid": "invalid",
+        "empty_content": "empty_content",
+        "transaction_conflict": "transaction_conflict",
         "not_found": "not_found",
         "unsupported_storage": "unsupported_storage",
         "db_error": "db_error"

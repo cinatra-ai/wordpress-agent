@@ -53,7 +53,7 @@
  * named `ExtensionToolCallRefusal` whose message is one sentence that starts
  * with its code (`post_read_unavailable` for `page`, `page_form_unavailable`
  * for `form` and `unchanged`, `reviewed_change_unavailable` for `read`,
- * `write_answer_unreadable` for `outcome`). The step and the run fail; before
+ * `write_answer_unreadable` or `write_outcome_unknown` for `outcome`). The step and the run fail; before
  * the write, the write step never runs. It reads no port but the artifact read, and writes no
  * port, no table and no artifact.
  */
@@ -64,11 +64,20 @@ export const PAGE_CODE = "post_read_unavailable";
 /** The refusal of the run's inputs: nothing is read from the site. */
 export const INPUT_CODE = "run_input_invalid";
 export const OUTCOME_CODE = "write_answer_unreadable";
+/**
+ * The site's answer that the database did not confirm the save and the change
+ * may or may not be stored. Unlike every refusal in `WRITE_REFUSALS`, nothing
+ * is known about the post: the run fails with this code and never says that
+ * nothing was written.
+ */
+export const OUTCOME_UNKNOWN_CODE = "write_outcome_unknown";
 
 /**
  * The refusal codes of the site ability `cinatra/post-update-if-unchanged`
- * other than `post_changed`, each with the plain message the run ends with.
- * After each of them nothing was written.
+ * other than `post_changed` and `write_outcome_unknown`, each with the plain
+ * message the run ends with. After each of them nothing was written. Every code
+ * the ability answers has an explicit entry here, or is `post_changed` (the way
+ * back to the read) or `write_outcome_unknown` (`OUTCOME_UNKNOWN_CODE`).
  */
 export const WRITE_REFUSALS = {
   site_policy_conflict:
@@ -78,10 +87,20 @@ export const WRITE_REFUSALS = {
   post_locked: "Nothing was written: another user is editing the post on the site. Start a new run when they are done.",
   unsupported_status: "Nothing was written: the post is no longer published or a draft, and this agent edits only published posts and drafts.",
   invalid: "Nothing was written: the site refused the request as malformed. This is a fault of the agent; report it.",
+  empty_content:
+    "Nothing was written: the change would have left the post empty, or the site's own rules count the result as empty. Ask for a change that keeps some content.",
+  transaction_conflict:
+    "Nothing was written: the site's database has another transaction open, or is set so that this save cannot run on its own. Try again later; if it keeps happening, check the site's database settings and plugins.",
   not_found: "Nothing was written: the post no longer exists, or this account may no longer edit it.",
   unsupported_storage: "Nothing was written: the site's database cannot lock a post row (the posts table does not use InnoDB).",
   db_error: "Nothing was written: the site's database refused the save. Start a new run later.",
 };
+
+/** Added to the message of a refusal that says the site's cache may still serve the post as it was. */
+const CACHE_STALE_NOTE = "The site may still show an outdated copy of the post for a while.";
+
+/** `data.cache_stale` exactly true: the answer says a stale copy of the post may still be served. */
+const cacheStale = (data) => isPlainObject(data) && data.cache_stale === true;
 
 /** The type of the page snapshot the flow files. */
 const PAGE_TYPE = "@cinatra-ai/website-artifacts:page-snapshot";
@@ -131,6 +150,7 @@ const REFUSAL_WORDS = {
   [PAGE_CODE]: ["nothing was proposed", "start a new run"],
   [INPUT_CODE]: ["nothing was read from the site", "start a new run with a valid post and site"],
   [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
+  [OUTCOME_UNKNOWN_CODE]: ["the site did not confirm whether the change was stored", "check the post on the site before trying again"],
 };
 
 class Refusal extends Error {
@@ -1052,6 +1072,14 @@ function changedParts(data) {
  *   current post, naming the changed parts the site named.
  * - each other refusal code of the ability (`WRITE_REFUSALS`): nothing was
  *   written; the run ends completed with `error` and its plain message.
+ * - `write_outcome_unknown`: the site did not confirm whether the change was
+ *   stored (`data.cause` `unreadable` or `differs`). The run fails with that
+ *   code, and its message never says that nothing was written: the person
+ *   checks the post on the site before trying again.
+ * - On a refusal, `data.cache_stale` exactly true adds one sentence: the site
+ *   may still show an outdated copy of the post. On a save, `data.commit_unacknowledged`
+ *   changes nothing: the site read the stored row back, so the save is a save and
+ *   the message does not mention it.
  *
  * Any other answer is refused (`write_answer_unreadable`): the run fails and
  * tells the person to check the post on the site, because the save's outcome
@@ -1067,6 +1095,7 @@ function outcome(call) {
   const success = jsonValue(call.success);
   const code = jsonValue(call.code);
   const data = jsonValue(call.data);
+  const stale = cacheStale(data) ? ` ${CACHE_STALE_NOTE}` : "";
   if (success === false && code === "post_changed") {
     const parts = changedParts(data);
     const named = parts.length > 0 ? ` (changed: ${parts.join(", ")})` : "";
@@ -1075,12 +1104,22 @@ function outcome(call) {
       next: "post_changed",
       reviewNotice:
         `Nothing was written: the post changed on the site after it was read${named}. ` +
-        "The change was proposed again against the current post; review it again.",
+        `The change was proposed again against the current post; review it again.${stale}`,
     };
   }
   if (success === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(WRITE_REFUSALS, code)) {
-    const message = WRITE_REFUSALS[code];
+    const message = `${WRITE_REFUSALS[code]}${stale}`;
     return { ...base, next: code, error: { code, message }, message };
+  }
+  if (success === false && code === OUTCOME_UNKNOWN_CODE) {
+    const cause = isPlainObject(data) ? data.cause : undefined;
+    const why =
+      cause === "unreadable"
+        ? "the post could not be read back after the save"
+        : cause === "differs"
+          ? "the post read back after the save is not the post as it was before, so the change may have been stored without the site's after-save steps"
+          : "the site's answer names no cause this agent knows";
+    throw new Refusal(OUTCOME_UNKNOWN_CODE, `${why}${cacheStale(data) ? ", and the site may still show an outdated copy of the post" : ""}`);
   }
   if (success !== true) refuse("the site's answer is neither a save nor a refusal this agent knows");
   if (!/^[1-9][0-9]*$/.test(postId) || jsonValue(call.post_id) !== Number(postId)) refuse("the site's answer names another post than the run's post");
