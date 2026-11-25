@@ -232,7 +232,7 @@ const WORDPRESS_FIXTURE_FORM = {
   page: {
     title: "Pricing — 2026 plans",
     address: "https://acme.example/pricing",
-    cmsAddress: "https://acme.example/wp-admin/post.php?post=42&action=edit",
+    cmsAddress: null,
   },
   readAt: "2026-09-29T10:00:00.000Z",
   excerpts: [
@@ -367,7 +367,7 @@ test("S3: the compose step answers the values to save, and the filed form shows 
   assert.deepEqual(example.page.page, {
     title: "Opening hours",
     address: "https://example.org/opening-hours/",
-    cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit",
+    cmsAddress: null,
   }, "the display draws the addresses built from the read");
   assert.deepEqual(pageForm.writeFields, exampleForm.writeFields, "the filed values are the composed values");
   assert.deepEqual(pageForm.excerpts.map((e) => e.region), ["title", "content", "content"]);

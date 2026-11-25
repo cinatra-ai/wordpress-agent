@@ -475,11 +475,14 @@ test("F16 an answer that is neither a save nor a known refusal fails the run and
   }
 });
 
-// Every code the site ability `cinatra/post-update-if-unchanged` answers, as its
-// documentation lists them (cinatra-ai/wordpress-plugin, "Content abilities" in
-// docs/advanced-and-reference.md, and the refusals of cinatra.php), read at PR #120
-// head 5644e711. When the plugin documents another
-// code, add it here: the test below then fails until the pack maps it explicitly.
+// A COPY, not a live read: every code the site ability
+// `cinatra/post-update-if-unchanged` answers, copied by hand from the plugin's
+// reference doc, cinatra-ai/wordpress-plugin docs/advanced-and-reference.md
+// ("A refusal is a normal result ..."; "The codes are ..."), checked against the
+// refusals in cinatra.php and the `data.cause` enum of its output schema, at
+// PR #120 head f6c0ff498521784cc862a0dfafbc6d01b8527483. This test cannot see a
+// later change of the plugin: when its doc lists another code or cause, copy it
+// here, and the tests below fail until the pack maps it explicitly.
 const PLUGIN_REFUSAL_CODES = [
   "post_changed",
   "site_policy_conflict",
@@ -1014,7 +1017,7 @@ test("F31 each stored value must equal what was reviewed (a saved field), the va
   assert.equal(cleared.next, "written", "a cleared title is stored as the empty text");
 });
 
-// Every code the plugin's write can answer (cinatra.php at PR #120 head 5644e711:
+// Every code the plugin's write can answer (cinatra.php at PR #120 head f6c0ff49:
 // cinatra_ability_post_update_if_unchanged, cinatra_content_begin,
 // cinatra_content_update_in_transaction, cinatra_content_end and their refusal
 // helpers), with what the pack does with it.

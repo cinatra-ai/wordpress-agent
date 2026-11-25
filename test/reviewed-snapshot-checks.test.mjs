@@ -57,7 +57,7 @@ const PAGE = {
   status: "draft",
   title: "Opening hours",
   address: "https://example.org/opening-hours/",
-  cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit",
+  cmsAddress: null,
 };
 
 /** The read inputs as the flow renders them: each value as JSON text. The run's post id comes from the start, the read's from the read step. */
@@ -140,7 +140,7 @@ test("S1b an address a model writes never reaches the page record", async () => 
     "no address": ["", { address: null, cmsAddress: null }],
     "an http address": ["http://example.org/opening-hours/", { address: "http://example.org/opening-hours/", cmsAddress: null }],
     "an address with credentials": ["https://user:pw@example.org/x", { address: "https://user:pw@example.org/x", cmsAddress: null }],
-    "an address on a port": ["https://example.org:8443/x", { address: "https://example.org:8443/x", cmsAddress: "https://example.org:8443/wp-admin/post.php?post=42&action=edit" }],
+    "an address on a port": ["https://example.org:8443/x", { address: "https://example.org:8443/x", cmsAddress: null }],
   };
   for (const [name, [address, expected]] of Object.entries(cases)) {
     const { pageForm: filed } = await extensionTool({ input: formCall(CONTENT_CHANGE, { ...READ, address }, forged), ports: {} });
@@ -148,6 +148,26 @@ test("S1b an address a model writes never reaches the page record", async () => 
   }
   assert.deepEqual(Object.keys(members(find(parts.compose_change.outputs, "pageForm"))).sort(), ["cinatraCmsPage", "system", "writeFields"], "the compose step answers no page record");
   assert.equal(parts.compose_change.data.system.includes("cmsAddress"), false, "the compose step is not asked for an address");
+});
+
+// The site's read answer (cinatra-ai/wordpress-plugin PR #120, head f6c0ff49,
+// cinatra_content_shape_row) carries the post's permalink and no edit link and
+// no admin address. An edit link built from the permalink's origin is wrong for
+// a site installed below a path or administered on another address, and can
+// open another installation's post with the same id: none is built.
+test("S1c the edit address is never built from the permalink: no edit link in the site's answer files none", async () => {
+  const { extensionTool } = await load();
+  const cases = {
+    "WordPress installed below /blog": "https://example.org/blog/opening-hours/",
+    "a public address other than the installation's": "https://www.example.org/opening-hours/",
+    "a plain https permalink": "https://example.org/opening-hours/",
+  };
+  for (const [name, address] of Object.entries(cases)) {
+    const { pageForm: filed } = await extensionTool({ input: formCall(CONTENT_CHANGE, { ...READ, address }), ports: {} });
+    assert.equal(filed.page.address, address, `${name}: the address is the permalink as read, unchanged`);
+    assert.equal(filed.page.cmsAddress, null, `${name}: no edit address is made up`);
+  }
+  assert.equal(parts.read_page.outputs.some((o) => /edit|admin/i.test(o.title)), false, "the read step answers no edit link to take");
 });
 
 test("S2 a revision whose page record is missing or names another post, status, title or address is refused, saying which part differs", async () => {

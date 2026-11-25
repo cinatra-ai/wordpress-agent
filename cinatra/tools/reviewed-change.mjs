@@ -85,7 +85,7 @@ export const OUTCOME_UNKNOWN_CODE = "write_outcome_unknown";
  * message the run ends with. The site answers each of them only when it showed
  * its own transaction intact to the end, or before it started one, so after
  * each of them nothing was written (cinatra-ai/wordpress-plugin PR #120, head
- * 5644e711, `cinatra_content_end()`). Every code
+ * f6c0ff49, `cinatra_content_end()`). Every code
  * the ability answers has an explicit entry here, or is `post_changed` (the way
  * back to the read) or `write_outcome_unknown` (`OUTCOME_UNKNOWN_CODE`).
  */
@@ -599,32 +599,27 @@ function checkedRead(call, refuse) {
   return { postId, status, title: texts.title, content: texts.content, excerpt: texts.excerpt, address: texts.address.trim() };
 }
 
-/** The address, when its text starts with `https://`, it parses, its protocol is https and it carries no user name or password; else null. */
-function httpsAddress(value) {
-  if (!/^https:\/\//i.test(value)) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.username === "" && url.password === "" ? url : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The page record the snapshot files, built by code from this run's read only:
- * the post id, the status, the title, the post's own address as the read
- * answered it (null when empty) and the address that opens the post in the
- * WordPress editor, on the origin of that address (null when the address is
- * not an https address). No value of the compose step's answer reaches it.
+ * the post id, the status, the title and the post's own address as the read
+ * answered it, unchanged (null when empty). No value of the compose step's
+ * answer reaches it.
+ *
+ * The edit address is taken only from the site's own answer, and the read of
+ * `cinatra/post-read` answers none (cinatra-ai/wordpress-plugin PR #120, head
+ * f6c0ff49, `cinatra_content_shape_row`: the permalink, no edit link, no admin
+ * address). So it is null. It is never built from the permalink: a site
+ * installed below a path, or administered on another address than its public
+ * one, would get a link to the wrong admin location, possibly to another
+ * installation's post with the same id.
  */
 function pageOf(read) {
-  const url = httpsAddress(read.address);
   return {
     postId: read.postId,
     status: read.status,
     title: read.title,
     address: read.address === "" ? null : read.address,
-    cmsAddress: url === null ? null : `${url.origin}/wp-admin/post.php?post=${read.postId}&action=edit`,
+    cmsAddress: null,
   };
 }
 

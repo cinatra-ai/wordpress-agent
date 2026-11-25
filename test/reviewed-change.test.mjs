@@ -54,7 +54,7 @@ const READ = {
 /** The rest of a successful read: the run's post id, the read's, its status, change time, address and error. */
 const READ_STATE = { postId: "42", status: "publish", modified: "2026-11-20 10:00:00", address: "https://example.org/opening-hours/", error: { code: "", message: "" } };
 /** The page record the tool builds from that read. */
-const PAGE = { postId: "42", status: "publish", title: "Opening hours", address: "https://example.org/opening-hours/", cmsAddress: "https://example.org/wp-admin/post.php?post=42&action=edit" };
+const PAGE = { postId: "42", status: "publish", title: "Opening hours", address: "https://example.org/opening-hours/", cmsAddress: null };
 const FILED_FIELDS = { title: "Opening hours and holidays", content: READ.content.replace("Monday to Friday", "Monday to Saturday"), excerpt: null };
 const SUCCESSOR_FIELDS = { title: null, content: READ.content.replace("https://example.org/old", "https://example.org/new"), excerpt: null };
 
