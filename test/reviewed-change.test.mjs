@@ -133,8 +133,8 @@ const refusedWith = (code) => (err) =>
 test("T1 the flow derives the filed form by the tool, and reads the approved revision back by the tool", () => {
   const road = oas.nodes.map((n) => n.$component_ref);
   assert.deepEqual(road, [
-    "start", "read_page", "compose_change", "form_page", "file_page", "gather_page_review",
-    "page_review_gate", "read_reviewed_page", "edit", "emit_output", "end",
+    "start", "read_page", "compose_change", "form_page", "route_change", "file_page", "gather_page_review",
+    "page_review_gate", "read_reviewed_page", "edit", "no_change_outcome", "emit_output", "end",
   ]);
   for (const id of ["form_page", "read_reviewed_page"]) {
     const node = parts[id];
@@ -200,8 +200,6 @@ test("T4 the model's own excerpts are never filed", async () => {
 
 test("T5 the form is refused when the change cannot be shown", async () => {
   await assert.rejects(formOf({ title: null, content: READ.content.replace("</p>\n<!-- /wp:paragraph -->", "</p>  \n<!-- /wp:paragraph -->"), excerpt: null }), refusedWith(FORM_CODE), "white space only");
-  await assert.rejects(formOf({ title: READ.title, content: null, excerpt: null }), refusedWith(FORM_CODE), "no change");
-  await assert.rejects(formOf({ title: null, content: null, excerpt: null }), refusedWith(FORM_CODE), "no values");
   await assert.rejects(formOf({ title: null, content: "", excerpt: null }), refusedWith(FORM_CODE), "an empty value");
 });
 
@@ -275,4 +273,135 @@ test("T9 the write step takes the values only from the read, and keeps its check
     assert.equal(titles(parts.edit.inputs).includes(gone), false, `the write step takes no ${gone}`);
   assert.ok(user.includes("- reviewedFields: {{ reviewedFields }}"));
   for (const code of ["post_changed", "page_editing_unsupported", "reviewed_change_unavailable"]) assert.ok(system.includes(code));
+});
+
+// --- only a changed field is saved ----------------------------------------------
+
+test("T10 a change of the title alone saves the title alone, though the compose step repeats the other values", async () => {
+  const { extensionTool } = await load();
+  const composed = { title: "Opening hours and holidays", content: READ.content, excerpt: READ.excerpt };
+  const form = await formOf(composed);
+  assert.deepEqual(form.writeFields, { title: composed.title, content: null, excerpt: null }, "an unchanged value is null in the filed form");
+  assert.deepEqual(form.excerpts.map((e) => e.region), ["title"]);
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
+  const result = await extensionTool({ input: readCall(answer([FILED])), ports });
+  assert.deepEqual(JSON.parse(result.reviewedFields), { title: composed.title, content: null, excerpt: null }, "the write step is handed the title alone");
+});
+
+test("T11 a change of the content alone saves the content alone", async () => {
+  const { extensionTool } = await load();
+  const content = READ.content.replace("Monday to Friday", "Monday to Saturday");
+  const form = await formOf({ title: READ.title, content, excerpt: READ.excerpt });
+  assert.deepEqual(form.writeFields, { title: null, content, excerpt: null });
+  assert.deepEqual(form.excerpts.map((e) => e.region), ["content"]);
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: JSON.stringify(form) });
+  const result = await extensionTool({ input: readCall(answer([FILED])), ports });
+  assert.deepEqual(JSON.parse(result.reviewedFields), { title: null, content, excerpt: null });
+});
+
+test("T12 the read-back refuses a revision that would save a field its excerpts do not show, also when that value equals the post as read", async () => {
+  const { extensionTool } = await load();
+  const form = await formOf({ title: "Opening hours and holidays", content: null, excerpt: null });
+  for (const [field, value] of [["content", READ.content], ["excerpt", READ.excerpt]]) {
+    const extra = JSON.stringify({ ...form, writeFields: { ...form.writeFields, [field]: value } });
+    const { ports } = portsAnswering({ [FILED.representationRevisionId]: extra });
+    await assert.rejects(extensionTool({ input: readCall(answer([FILED])), ports }), refusedWith(READ_CODE), `an unchanged ${field}`);
+  }
+  const edit = parts.edit.data.system;
+  assert.ok(edit.includes("never write a field whose `reviewedFields` member is null"), "the write step never sends a null member");
+  assert.ok(edit.includes("carrying exactly the `reviewedFields` members that are non-empty strings"), "the update carries only the returned values");
+});
+
+// --- the work of the comparison is bounded --------------------------------------
+
+const manyBlocks = (count, change = () => null) =>
+  Array.from({ length: count }, (_, i) => change(i) ?? `<!-- wp:paragraph -->\n<p>Block ${i}.</p>\n<!-- /wp:paragraph -->\n\n`).join("");
+
+test("T13 a post of 5,000 blocks with one changed block compares only the changed block", async () => {
+  const { compareBlocks, blocksOf } = await load();
+  const before = manyBlocks(5000);
+  const after = manyBlocks(5000, (i) => (i === 2500 ? "<!-- wp:paragraph -->\n<p>Block 2500, changed.</p>\n<!-- /wp:paragraph -->\n\n" : null));
+  const meter = { cells: 0 };
+  const entries = compareBlocks(blocksOf(before), blocksOf(after), () => assert.fail("not refused"), meter);
+  assert.ok(meter.cells > 0 && meter.cells <= 16, `the table holds the changed blocks only, not ${meter.cells} cells`);
+  assert.equal(entries.filter((e) => e.op !== "same").length, 2, "one block removed, one added");
+  const form = await formOf({ title: null, content: after, excerpt: null }, { ...READ, content: before });
+  assert.equal(form.excerpts.length, 1);
+  assert.ok(form.excerpts[0].proposed.includes("Block 2500, changed."));
+  assert.ok(form.excerpts[0].published.includes("Block 2500."));
+});
+
+test("T14 a change whose compared part is too large is refused, at the form and at the read-back", async () => {
+  const { extensionTool } = await load();
+  const before = manyBlocks(5000);
+  const ends = (i) => (i === 0 || i === 4999 ? `<p>Block ${i}, changed.</p>\n\n` : null);
+  const after = manyBlocks(5000, ends);
+  const tooLarge = (code) => (err) => refusedWith(code)(err) && err.message.includes("more blocks than the page snapshot form can compare");
+  await assert.rejects(formOf({ title: null, content: after, excerpt: null }, { ...READ, content: before }), tooLarge(FORM_CODE));
+  const snapshot = JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields: { title: null, content: after, excerpt: null }, excerpts: [] });
+  const { ports } = portsAnswering({ [FILED.representationRevisionId]: snapshot });
+  const call = { ...readCall(answer([FILED])), content: JSON.stringify(before) };
+  await assert.rejects(extensionTool({ input: call, ports }), tooLarge(READ_CODE));
+
+  const blocks = manyBlocks(20001);
+  await assert.rejects(formOf({ title: null, content: `${blocks}<p>x</p>`, excerpt: null }, { ...READ, content: blocks }), refusedWith(FORM_CODE), "too many blocks");
+  const long = "a".repeat(2_000_001);
+  await assert.rejects(formOf({ title: null, content: null, excerpt: long }), refusedWith(FORM_CODE), "too long a value");
+  await assert.rejects(formOf({ title: "New", content: null, excerpt: null }, { ...READ, content: long }), refusedWith(FORM_CODE), "too long a read");
+});
+
+// --- a change of nothing ends the run completed -----------------------------------
+
+test("T15 a change of nothing ends the run completed, past the filing and the review, and makes no site call", async () => {
+  const BRANCH = "route_change";
+  const NO_CHANGE = "no_change_outcome";
+  const branch = parts[BRANCH];
+  assert.ok(branch, "the flow carries the branch");
+  assert.equal(branch.component_type, "BranchingNode");
+  assert.deepEqual(branch.branches, ["default", "no_change"]);
+  assert.deepEqual(branch.mapping, { no_change: "no_change" });
+  assert.deepEqual(sourcesOf(BRANCH, "next"), [["form_page", "next"]]);
+  const edges = oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.from_branch ?? null, e.to_node.$component_ref]);
+  assert.deepEqual(edges.filter(([from]) => from === "form_page"), [["form_page", null, BRANCH]]);
+  assert.deepEqual(edges.filter(([from]) => from === BRANCH), [[BRANCH, "default", "file_page"], [BRANCH, "no_change", NO_CHANGE]], "any other answer goes to the filing and the review");
+  assert.deepEqual(edges.filter(([from]) => from === NO_CHANGE), [[NO_CHANGE, null, "emit_output"]]);
+  assert.deepEqual(controlInto("file_page"), [BRANCH]);
+  assert.deepEqual(controlInto("emit_output").sort(), ["edit", NO_CHANGE]);
+
+  const node = parts[NO_CHANGE];
+  assert.equal(node.component_type, "ApiNode");
+  assert.equal(node.data.tool, "extension_tool");
+  assert.equal(node.data.input.name, TOOL);
+  assert.equal(node.data.input.input.op, "unchanged");
+  assert.equal(node.metadata.cinatra.riskClass, "read_only");
+  assert.equal("publishes" in node.metadata.cinatra, false);
+  for (const word of ["wordpress_site_tool", "ewpa/"]) assert.equal(JSON.stringify(node).includes(word), false, `the no-change step names no ${word}`);
+  assert.deepEqual(sourcesOf(NO_CHANGE, "pageForm"), [["compose_change", "pageForm"]]);
+  for (const field of ["title", "content", "excerpt", "status", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["read_page", field]]);
+  for (const input of ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"]) {
+    assert.deepEqual(sourcesOf("emit_output", input), [["edit", input], [NO_CHANGE, input]], `the output's ${input} comes from the one step that ran`);
+    assert.deepEqual(sourcesOf("end", input), [["edit", input], [NO_CHANGE, input]], `the end's ${input} comes from the one step that ran`);
+  }
+
+  const { extensionTool } = await load();
+  const nothing = { title: null, content: null, excerpt: null };
+  const route = async (writeFields) =>
+    (await extensionTool({ input: { op: "form", pageForm: JSON.stringify({ cinatraCmsPage: 1, system: "wordpress", page: PAGE, writeFields }), ...readInputs() }, ports: {} })).next;
+  assert.equal(await route(nothing), "no_change", "no values");
+  assert.equal(await route({ title: READ.title, content: READ.content, excerpt: READ.excerpt }), "no_change", "values equal to the post as read");
+  assert.equal(await route(FILED_FIELDS), "review", "a change is reviewed");
+
+  const ok = JSON.stringify({ code: "", message: "" });
+  const unchanged = (writeFields, over = {}) =>
+    extensionTool({
+      input: { op: "unchanged", postId: JSON.stringify("42"), instanceId: JSON.stringify("site-1"), pageForm: JSON.stringify({ writeFields }), status: JSON.stringify("publish"), error: ok, ...readInputs(), ...over },
+      ports: {},
+    });
+  const outcome = { ok: true, postId: "42", instanceId: "site-1", proposalId: "", changeSetId: "", changes: [], error: {} };
+  assert.deepEqual(await unchanged(nothing), outcome);
+  assert.deepEqual(await unchanged({ title: READ.title, content: null, excerpt: null }), outcome);
+  await assert.rejects(unchanged(FILED_FIELDS), refusedWith(FORM_CODE), "a change needs the review");
+  await assert.rejects(unchanged(nothing, { error: JSON.stringify({ code: "call_failed", message: "no" }) }), refusedWith(FORM_CODE), "a failed read");
+  await assert.rejects(unchanged(nothing, { status: JSON.stringify("") }), refusedWith(FORM_CODE), "a read with no status");
+  await assert.rejects(unchanged(nothing, { pageForm: JSON.stringify("x") }), refusedWith(FORM_CODE), "no values");
 });

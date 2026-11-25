@@ -32,13 +32,22 @@ const ROAD = [
   "read_page",
   "compose_change",
   "form_page",
+  "route_change",
   "file_page",
   "gather_page_review",
   "page_review_gate",
   "read_reviewed_page",
   "edit",
+  "no_change_outcome",
   "emit_output",
   "end",
+];
+// The one road with a change, and the road of a request that changes nothing.
+const REVIEW_ROAD = ROAD.filter((id) => id !== "no_change_outcome");
+const CONTROL_EDGES = [
+  ...REVIEW_ROAD.slice(0, -1).map((id, index) => [id, id === "route_change" ? "default" : null, REVIEW_ROAD[index + 1]]),
+  ["route_change", "no_change", "no_change_outcome"],
+  ["no_change_outcome", null, "emit_output"],
 ];
 const RUN_OUTPUTS = ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"];
 
@@ -207,13 +216,14 @@ test("S1: the flow runs one road from the read through the review to the write",
   assert.deepEqual(
     oas.nodes.map((n) => n.$component_ref),
     ROAD,
-    "the eleven steps, in this order",
+    "the thirteen steps, in this order",
   );
   for (const id of ROAD) assert.ok(parts[id], `the step ${id} is defined`);
+  const edges = oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.from_branch ?? null, e.to_node.$component_ref]);
   assert.deepEqual(
-    oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.to_node.$component_ref]),
-    ROAD.slice(0, -1).map((id, index) => [id, ROAD[index + 1]]),
-    "the ten control edges, in this order, with no branch",
+    [...edges].sort(),
+    [...CONTROL_EDGES].sort(),
+    "the one road with a change, and one branch that takes a change of nothing past the filing and the review to the output",
   );
   assert.ok(ROAD.indexOf("edit") > ROAD.indexOf(GATE), "the write step comes after the review");
 });

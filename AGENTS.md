@@ -66,7 +66,7 @@ All fields are strings. `postId` is a string representation of a numeric ID — 
 }
 ```
 
-Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) and a request that changes nothing (code `nothing_to_change`) end the run failed at the compose step, before anything is filed, reviewed or shown on the publish card.
+Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) ends the run failed at the compose step, before anything is filed, reviewed or shown on the publish card. A request that changes nothing is no error: it ends the run completed with empty `changes` and no `error`, past the filing and the review (see below).
 
 **Stopped variant** (the run completes, nothing was written, no `proposalId`): `post_changed` when the post's change time or status differs, just before the write, from the read the review was based on (another editor changed, published or unpublished it during the review), and `reviewed_change_unavailable` when the write step is handed no usable reviewed values (a backstop; the step in front of it already fails the run in that case, see below). The `message` says that nothing was written.
 
@@ -75,13 +75,19 @@ The caller reads this from `task.history` (not `task.artifacts`) — WayFlow's `
 ## The write saves only the reviewed change (cinatra-ai/cinatra#3745)
 
 The flow is `start` → `read_page` → `compose_change` → `form_page` →
-`file_page` → `gather_page_review` → `page_review_gate` →
-`read_reviewed_page` → `edit` → `emit_output` → `end`.
+`route_change` → `file_page` → `gather_page_review` → `page_review_gate` →
+`read_reviewed_page` → `edit` → `emit_output` → `end`. When no value to save
+changes the post, `form_page` answers `next: "no_change"` and the branch
+`route_change` takes the run to `no_change_outcome` (op `unchanged`, which
+checks this again) → `emit_output` → `end`: the run completes with empty
+`changes`, and nothing is filed, reviewed or written.
 
 `compose_change` answers the values to save in `pageForm.writeFields`: the
 complete new `title`, `content` and `excerpt`, each a non-empty string or
 null. It answers no excerpts. `form_page` calls the pack's `reviewed_change`
-tool (`cinatra/tools/reviewed-change.mjs`, op `form`), which derives the
+tool (`cinatra/tools/reviewed-change.mjs`, op `form`). It sets each value that
+equals the post as read to null (not saved), so the filed values, the shown
+excerpts and the saved values name the same fields. It derives the
 excerpts the review shows from those values and the post as read, by code: each
 value is split into its top-level blocks (an element with its content, a
 comment, or a run of text), the blocks of the post as read and of the value are
@@ -90,8 +96,13 @@ sides, markup and link targets included. The blocks it does not show are byte
 for byte the post as read. So a change of a link target alone is shown, and no
 value can be saved that the review does not show. The tool refuses
 (`page_form_unavailable`, the run fails, nothing is filed) when the values
-change nothing, differ from the post only in white space (the display shows no
-difference there), touch more than 200 blocks, or are not texts or null.
+differ from the post only in white space (the display shows no
+difference there), touch more than 200 blocks, or are not texts or null. It
+bounds its work before it compares: a value of more than 2,000,000
+characters, a content of more than 20,000 blocks, or a changed part (the
+blocks between the unchanged ones at the start and at the end) whose
+comparison table would exceed 4,000,000 cells is refused. The read-back
+applies the same bounds.
 
 After the review, `read_reviewed_page` calls the same tool (op `read`). It
 takes the revision the review's answer approves (`review.targets` of the
@@ -102,14 +113,16 @@ Regenerate the approved revision is a successor of the filed one. It reads that
 revision through the host's artifact read port by its revision id, derives the
 excerpts again from its `writeFields` and the post as read, and answers
 `reviewedFields` (the JSON text of the values) and `reviewedRevisionId` only
-when they equal the excerpts the revision shows. `edit` saves exactly
+when they equal the excerpts the revision shows and the excerpts show every
+value it would save. `edit` saves exactly
 `reviewedFields`. The tool refuses, so the run fails with
 `reviewed_change_unavailable` and a message and no WordPress call is made, when
 the answer names no single approved revision of the filed artifact, when the
 read fails, is cut short or answers another revision or artifact, when the text
 is not a WordPress page snapshot or carries no values to save, and when its
-values differ from the excerpts it shows. The re-read of the post before the
-write (`post_changed`), `page_editing_unsupported`, `nothing_to_change` and
+values differ from the excerpts it shows or include a value the excerpts do
+not show. The re-read of the post before the
+write (`post_changed`), `page_editing_unsupported` and
 the rows of the publish card stay as they are.
 
 What the review cannot show: a change of white space alone (refused, see

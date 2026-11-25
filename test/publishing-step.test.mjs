@@ -10,7 +10,8 @@
 // revision the review approved, and the write step saves only its values.
 //
 // The card is shown only on a run that has a change to save: a request on a
-// page, and a request that changes nothing, end the run at the compose step,
+// page ends the run failed at the compose step, and a request that changes
+// nothing ends it completed by a branch past the filing and the review, both
 // before anything is filed, reviewed or shown on a card. On the card, the
 // status row's label states the demotion as a rule of the save, so it is true
 // also when a check of the write step stops the run before the save.
@@ -125,12 +126,15 @@ test("the status row shows the value the write step decides the demotion on, und
 // The branches of a run that save nothing. Each one either ends the run before
 // the card, or is a stop of the write step that makes no write and so no
 // demotion.
-test("a request on a page and a request that changes nothing end the run at the compose step, before the card", () => {
+test("a request on a page ends the run at the compose step, and a request that changes nothing ends it completed past the filing, both before the card", () => {
   const compose = parts[COMPOSE_STEP];
   const system = collapse(compose.data.system);
   assert.ok(system.includes("When `postType` is `page`, answer `error.code` `\"page_editing_unsupported\"`"));
-  assert.ok(system.includes("answer `error.code` `\"nothing_to_change\"`"));
-  assert.ok(system.includes("before anything is filed, reviewed or written"));
+  assert.ok(system.includes("answer every `writeFields` member null and the empty string in `error.code` and in `error.message`"));
+  assert.equal(system.includes("nothing_to_change"), false, "a change of nothing is no error");
+  assert.ok(system.includes("the run ends completed with no changes, before anything is filed, reviewed or written"));
+  const intoWrite = oas.control_flow_connections.filter((edge) => edge.to_node.$component_ref === WRITE_STEP).map((edge) => edge.from_node.$component_ref);
+  assert.deepEqual(intoWrite, [REVIEWED_READ], "the no-change road never reaches the card of the write step");
   assert.ok(compose.outputs.some((output) => output.title === "error"), "the compose step answers its error");
   assert.equal(has(compose.data, "completed_error_codes"), false, "an error of the compose step ends the run failed");
   const road = topLevelIds();

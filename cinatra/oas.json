@@ -92,6 +92,9 @@
       "$component_ref": "form_page"
     },
     {
+      "$component_ref": "route_change"
+    },
+    {
       "$component_ref": "file_page"
     },
     {
@@ -105,6 +108,9 @@
     },
     {
       "$component_ref": "edit"
+    },
+    {
+      "$component_ref": "no_change_outcome"
     },
     {
       "$component_ref": "emit_output"
@@ -146,12 +152,34 @@
     },
     {
       "component_type": "ControlFlowEdge",
-      "name": "form_page_to_file_page",
+      "name": "form_page_to_route_change",
       "from_node": {
         "$component_ref": "form_page"
       },
       "to_node": {
+        "$component_ref": "route_change"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "route_change_to_file_page",
+      "from_node": {
+        "$component_ref": "route_change"
+      },
+      "from_branch": "default",
+      "to_node": {
         "$component_ref": "file_page"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "route_change_to_no_change_outcome",
+      "from_node": {
+        "$component_ref": "route_change"
+      },
+      "from_branch": "no_change",
+      "to_node": {
+        "$component_ref": "no_change_outcome"
       }
     },
     {
@@ -199,6 +227,16 @@
       "name": "edit_to_emit_output",
       "from_node": {
         "$component_ref": "edit"
+      },
+      "to_node": {
+        "$component_ref": "emit_output"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "no_change_outcome_to_emit_output",
+      "from_node": {
+        "$component_ref": "no_change_outcome"
       },
       "to_node": {
         "$component_ref": "emit_output"
@@ -923,6 +961,270 @@
         "$component_ref": "emit_output"
       },
       "destination_input": "changes"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "form_page_to_route_change_next",
+      "source_node": {
+        "$component_ref": "form_page"
+      },
+      "source_output": "next",
+      "destination_node": {
+        "$component_ref": "route_change"
+      },
+      "destination_input": "next"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_postId",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_instanceId",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "instanceId",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "instanceId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "compose_change_to_no_change_outcome_pageForm",
+      "source_node": {
+        "$component_ref": "compose_change"
+      },
+      "source_output": "pageForm",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "pageForm"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_title",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "title",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "title"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_content",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "content",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "content"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_excerpt",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "excerpt",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "excerpt"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_status",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "status",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "status"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "read_page_to_no_change_outcome_error",
+      "source_node": {
+        "$component_ref": "read_page"
+      },
+      "source_output": "error",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "error"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_no_change_outcome_cinatra_run_id",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "cinatra_run_id",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "cinatra_run_id"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_postId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_instanceId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "instanceId",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "instanceId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_proposalId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "proposalId",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "proposalId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_changeSetId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "changeSetId",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "changeSetId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_changes",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "changes",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "changes"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_error",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "error",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "error"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_postId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_instanceId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "instanceId",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "instanceId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_proposalId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "proposalId",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "proposalId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_changeSetId",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "changeSetId",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "changeSetId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_changes",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "changes",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "changes"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_error",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "error",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "error"
     }
   ],
   "$referenced_components": {
@@ -1081,7 +1383,7 @@
       "data": {
         "agent_id": "wordpress-content-editor",
         "toolbox_ids": [],
-        "system": "You are the WordPress change composer. No tool joins this step: do NOT call any tool. From the post the read step read and the user's instructions, you compose the values to save and the page form the flow files.\n\n## Inputs\n\n`instructions` is the requested change: a free-form request, or, on a repair round, a list of reviewer findings on a change already proposed for this post. `postId`, `instanceId`, `postType`, `title`, `content`, `excerpt`, `status`, `address` and `modified` are the post as the read step read it; `content` is one markup string. `error` is the read's error: a non-empty `error.code` means the read failed.\n\n## What you apply\n\nApply only the changes explicitly requested. Do not touch fields not mentioned by the user. On a repair round the findings ARE the request: apply only what the findings ask for. If a finding names a specific field or region (e.g. \"the title\", \"the second paragraph\"), scope your fix to that field. If a request or a finding is too vague to act on safely, do not guess at an unrelated change.\n\n## writeFields — the values the write step saves\n\n`pageForm.writeFields` carries the complete new value of each field the change touches: `title`, `content` (the whole new markup string, every unchanged block kept exactly as read) and `excerpt`. A field that does not change is null. Never an empty string for content or excerpt. The next step derives the excerpts the review shows from these values by code, and after the person approved the filed page snapshot, the write step reads it back and saves exactly these values, and no other value: the filed page snapshot is the only place they are given. So a value you put here is shown to the person as it is saved, markup and link targets included.\n\n## When nothing is filed\n\nSome requests end the run here, before anything is filed, reviewed or written:\n\n- When `postType` is `page`, answer `error.code` `\"page_editing_unsupported\"`: no ability can save a page.\n- When no field needs an actual change (every requested value already equals its current value, or nothing requested is concrete enough to act on safely), answer `error.code` `\"nothing_to_change\"`.\n\nIn both cases every `writeFields` member is null, and `error.message` is a short plain-language explanation. When there is a change to file, `error` carries the empty string in `code` and in `message`.\n\n## pageForm — the content the flow files\n\n- `cinatraCmsPage` is 1.\n- `system` is \"wordpress\".\n- `page.title` is the title as read.\n- `page.address` is the address the read step answered, or null when it is empty.\n- `page.cmsAddress` is the https origin of that address followed by `/wp-admin/post.php?post=<postId>&action=edit`, or null when the address is empty or not https.\n- There is no `readAt` key.\n- `writeFields` is described above.\n- There is no `excerpts` key: the next step derives the excerpts from `writeFields` and the post as read.\n- A change that touches nothing files nothing (see \"When nothing is filed\").\n\n`pageTitle` is the post's title as read.\n\n## Example\n\nThe one example form below is a change to a post's title, to the second paragraph of its body and to the second item of its list (the body reads: a heading, two paragraphs, then a list of two items). Its `writeFields` carries the new `title` and the whole new `content`, and null for `excerpt`.\n\nBEGIN EXAMPLE FORM\n{\"cinatraCmsPage\":1,\"system\":\"wordpress\",\"page\":{\"title\":\"Opening hours\",\"address\":\"https://example.org/opening-hours/\",\"cmsAddress\":\"https://example.org/wp-admin/post.php?post=42&action=edit\"},\"writeFields\":{\"title\":\"Opening hours and holidays\",\"content\":\"<h2>When we are open</h2><p>We are open Monday to Saturday.</p><p>Call ahead on public holidays.</p><ul><li>Monday to Friday: 9 to 18</li><li>Saturday: 9 to 13</li></ul>\",\"excerpt\":null}}\nEND EXAMPLE FORM",
+        "system": "You are the WordPress change composer. No tool joins this step: do NOT call any tool. From the post the read step read and the user's instructions, you compose the values to save and the page form the flow files.\n\n## Inputs\n\n`instructions` is the requested change: a free-form request, or, on a repair round, a list of reviewer findings on a change already proposed for this post. `postId`, `instanceId`, `postType`, `title`, `content`, `excerpt`, `status`, `address` and `modified` are the post as the read step read it; `content` is one markup string. `error` is the read's error: a non-empty `error.code` means the read failed.\n\n## What you apply\n\nApply only the changes explicitly requested. Do not touch fields not mentioned by the user. On a repair round the findings ARE the request: apply only what the findings ask for. If a finding names a specific field or region (e.g. \"the title\", \"the second paragraph\"), scope your fix to that field. If a request or a finding is too vague to act on safely, do not guess at an unrelated change.\n\n## writeFields — the values the write step saves\n\n`pageForm.writeFields` carries the complete new value of each field the change touches: `title`, `content` (the whole new markup string, every unchanged block kept exactly as read) and `excerpt`. A field that does not change is null. Never an empty string for content or excerpt. The next step derives the excerpts the review shows from these values by code, and after the person approved the filed page snapshot, the write step reads it back and saves exactly these values, and no other value: the filed page snapshot is the only place they are given. So a value you put here is shown to the person as it is saved, markup and link targets included.\n\n## When nothing is filed\n\nIn two cases nothing is filed, reviewed or written:\n\n- When `postType` is `page`, answer `error.code` `\"page_editing_unsupported\"`, every `writeFields` member null and a short plain-language explanation in `error.message`: no ability can save a page, and the run ends failed here, before anything is filed, reviewed or written.\n- When no field needs an actual change (every requested value already equals its current value, or nothing requested is concrete enough to act on safely), answer every `writeFields` member null and the empty string in `error.code` and in `error.message`. The next step finds that no value changes the post, and the run ends completed with no changes, before anything is filed, reviewed or written.\n\nWhen there is a change to file, `error` carries the empty string in `code` and in `message`.\n\n## pageForm — the content the flow files\n\n- `cinatraCmsPage` is 1.\n- `system` is \"wordpress\".\n- `page.title` is the title as read.\n- `page.address` is the address the read step answered, or null when it is empty.\n- `page.cmsAddress` is the https origin of that address followed by `/wp-admin/post.php?post=<postId>&action=edit`, or null when the address is empty or not https.\n- There is no `readAt` key.\n- `writeFields` is described above.\n- There is no `excerpts` key: the next step derives the excerpts from `writeFields` and the post as read.\n- A change that touches nothing files nothing (see \"When nothing is filed\").\n\n`pageTitle` is the post's title as read.\n\n## Example\n\nThe one example form below is a change to a post's title, to the second paragraph of its body and to the second item of its list (the body reads: a heading, two paragraphs, then a list of two items). Its `writeFields` carries the new `title` and the whole new `content`, and null for `excerpt`.\n\nBEGIN EXAMPLE FORM\n{\"cinatraCmsPage\":1,\"system\":\"wordpress\",\"page\":{\"title\":\"Opening hours\",\"address\":\"https://example.org/opening-hours/\",\"cmsAddress\":\"https://example.org/wp-admin/post.php?post=42&action=edit\"},\"writeFields\":{\"title\":\"Opening hours and holidays\",\"content\":\"<h2>When we are open</h2><p>We are open Monday to Saturday.</p><p>Call ahead on public holidays.</p><ul><li>Monday to Friday: 9 to 18</li><li>Saturday: 9 to 13</li></ul>\",\"excerpt\":null}}\nEND EXAMPLE FORM",
         "user": "Compose the values to save and the page form now and fill the declared output fields.\nInputs:\n- instructions: {{ instructions }}\n- postId: {{ postId }}\n- instanceId: {{ instanceId }}\n- postType: {{ postType }}\n- title: {{ title }}\n- content: {{ content }}\n- excerpt: {{ excerpt }}\n- status: {{ status }}\n- address: {{ address }}\n- modified: {{ modified }}\n- error: {{ error }}",
         "agent_run_id": "{{ agent_run_id }}",
         "cinatra_llm": {
@@ -1436,6 +1738,12 @@
           }
         },
         {
+          "title": "next",
+          "type": "string",
+          "description": "no_change when no value to save changes the post; review otherwise.",
+          "default": "review"
+        },
+        {
           "title": "ok",
           "type": "boolean",
           "default": false
@@ -1446,8 +1754,32 @@
           "riskClass": "read_only",
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
-          "description": "The agent derives the excerpts the review shows from the values to save and the post as read, by code: every changed block of a saved value is shown as its source text, links and markup included, so nothing can be saved that the review does not show."
+          "description": "The agent derives the excerpts the review shows from the values to save and the post as read, by code: only a value that changes the post is kept, and every changed block of it is shown as its source text, links and markup included, so nothing can be saved that the review does not show. A request that changes nothing takes the run to its end without a filing or a review."
         }
+      }
+    },
+    "route_change": {
+      "component_type": "BranchingNode",
+      "id": "route_change",
+      "name": "Branch on a change of nothing",
+      "metadata": {
+        "cinatra": {
+          "purpose": "route-a-change-of-nothing-past-the-filing-and-the-review"
+        }
+      },
+      "inputs": [
+        {
+          "title": "next",
+          "type": "string"
+        }
+      ],
+      "outputs": [],
+      "branches": [
+        "default",
+        "no_change"
+      ],
+      "mapping": {
+        "no_change": "no_change"
       }
     },
     "file_page": {
@@ -1925,6 +2257,214 @@
           ],
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent"
+        }
+      }
+    },
+    "no_change_outcome": {
+      "component_type": "ApiNode",
+      "id": "no_change_outcome",
+      "name": "End a change of nothing",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": {
+        "tool": "extension_tool",
+        "input": {
+          "name": "reviewed_change",
+          "input": {
+            "op": "unchanged",
+            "postId": "{# pyagentspec-input-hint (do not remove): {{ postId }} #}{{ postId | tojson }}",
+            "instanceId": "{# pyagentspec-input-hint (do not remove): {{ instanceId }} #}{{ instanceId | tojson }}",
+            "pageForm": "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",
+            "title": "{# pyagentspec-input-hint (do not remove): {{ title }} #}{{ title | tojson }}",
+            "content": "{# pyagentspec-input-hint (do not remove): {{ content }} #}{{ content | tojson }}",
+            "excerpt": "{# pyagentspec-input-hint (do not remove): {{ excerpt }} #}{{ excerpt | tojson }}",
+            "status": "{# pyagentspec-input-hint (do not remove): {{ status }} #}{{ status | tojson }}",
+            "error": "{# pyagentspec-input-hint (do not remove): {{ error }} #}{{ error | tojson }}"
+          }
+        },
+        "agent_run_id": "{{ cinatra_run_id }}"
+      },
+      "inputs": [
+        {
+          "title": "postId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "instanceId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "pageForm",
+          "type": "object",
+          "json_schema": {
+            "properties": {
+              "cinatraCmsPage": {
+                "type": "integer"
+              },
+              "system": {
+                "type": "string",
+                "enum": [
+                  "wordpress"
+                ]
+              },
+              "page": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cmsAddress": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "writeFields": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "content": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "excerpt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "title": "title",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "content",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "excerpt",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "status",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "error",
+          "type": "object",
+          "json_schema": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "default": {}
+        },
+        {
+          "title": "cinatra_run_id",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "outputs": [
+        {
+          "title": "postId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "instanceId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "proposalId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "changeSetId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "changes",
+          "type": "array",
+          "json_schema": {
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "before": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": []
+        },
+        {
+          "title": "error",
+          "type": "object",
+          "json_schema": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "default": {}
+        },
+        {
+          "title": "ok",
+          "type": "boolean",
+          "default": false
+        }
+      ],
+      "metadata": {
+        "cinatra": {
+          "riskClass": "read_only",
+          "requiresApproval": false,
+          "packageName": "@cinatra-ai/wordpress-agent",
+          "description": "The agent ends a request that changes nothing: it checks again that no value to save changes the post as read, and answers the post with no changes. Nothing is filed, reviewed or written."
         }
       }
     },
