@@ -53,13 +53,20 @@ for (const [title, value] of Object.entries(defaults)) {
   });
 }
 
-test("the default post type follows the existing read/edit branch; live status governs demotion", () => {
-  const { read_page, edit } = flow.$referenced_components;
-  assert.match(read_page.data.system, /Only unset\/`"post"` \(full edit support\)/);
-  assert.match(edit.data.system, /postType === "post".*\(the default\)/);
-  assert.match(edit.data.system, /never the caller-supplied `postStatus` input/);
+test("the post type comes from the read, the run's type is a hint, and the status as read governs the demotion", async () => {
+  const { check_read, write_page } = flow.$referenced_components;
+  assert.equal(check_read.data.input.input.op, "page", "the check of the read takes the type from the site's answer");
+  const hint = flow.data_flow_connections.find((edge) =>
+    edge.destination_node.$component_ref === "check_read" && edge.destination_input === "postType");
+  assert.equal(hint.source_node.$component_ref, "check_input", "the hint reaches the check of the read only after the check of the run's inputs");
   const status = flow.data_flow_connections.find((edge) =>
-    edge.destination_node.$component_ref === "edit" && edge.destination_input === "status");
+    edge.destination_node.$component_ref === "write_page" && edge.destination_input === "status");
   assert.equal(status.source_node.$component_ref, "read_page");
-  assert.equal(status.source_output, "status");
+  assert.equal(status.source_output, "post_status");
+  assert.equal(
+    flow.data_flow_connections.some((edge) => edge.source_node.$component_ref === "start" && edge.source_output === "postStatus"),
+    false,
+    "the caller's status hint never reaches a step",
+  );
+  assert.ok(write_page.data.input.argsJson.includes('{% if status == "publish" %}'));
 });

@@ -2,10 +2,11 @@
 // with the published and the proposed words, the application reviews it, and
 // the write step follows the review.
 //
-// Eight arms: S1 the flow's one road; S2 the read step; S3 the compose step and
-// the form it answers; S4 the filing step and the package manifest; S5 the
+// Nine arms: S1 the flow's one road; S2 the read step and its check; S3 the compose step, the
+// form it answers and the form the tool derives from it; S4 the filing step and the package manifest; S5 the
 // review step and the step that names the filed snapshot to it; S6 the write
-// step; S7 the declared module; S8 the end node.
+// step; S7 the declared module; S8 the end node; S9 the read of the reviewed
+// revision between the review and the write.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -28,14 +29,35 @@ const EXAMPLE_END = "END EXAMPLE FORM";
 
 const ROAD = [
   "start",
+  "check_input",
   "read_page",
+  "check_read",
   "compose_change",
+  "form_page",
+  "route_change",
   "file_page",
   "gather_page_review",
   "page_review_gate",
-  "edit",
+  "read_reviewed_page",
+  "write_page",
+  "write_outcome",
+  "route_write",
+  "no_change_outcome",
   "emit_output",
   "end",
+];
+// The one road with a change, and the road of a request that changes nothing.
+const REVIEW_ROAD = ROAD.filter((id) => id !== "no_change_outcome" && id !== "route_write");
+const WRITE_ENDS = ["written", "site_policy_conflict", "permission_unverified", "post_locked", "unsupported_status", "invalid", "empty_content", "transaction_conflict", "not_found", "unsupported_storage", "db_error", "write_outcome_unknown", "default"];
+const CONTROL_EDGES = [
+  ...REVIEW_ROAD.slice(0, -1)
+    .filter((id) => id !== "write_outcome")
+    .map((id, index) => [id, id === "route_change" ? "default" : null, REVIEW_ROAD[REVIEW_ROAD.indexOf(id) + 1]]),
+  ["write_outcome", null, "route_write"],
+  ...WRITE_ENDS.map((branch) => ["route_write", branch, "emit_output"]),
+  ["route_write", "post_changed", "read_page"],
+  ["route_change", "no_change", "no_change_outcome"],
+  ["no_change_outcome", null, "emit_output"],
 ];
 const RUN_OUTPUTS = ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"];
 
@@ -68,8 +90,8 @@ const assertBridgeNode = (id) => {
   assert.equal(node.component_type, "ApiNode");
   assert.ok(node.url.endsWith(LLM_BRIDGE_PATH), `${id} is a bridge step`);
   assert.equal(node.http_method, "POST");
-  assert.equal(node.data.agent_id, parts.edit.data.agent_id);
-  assert.deepEqual(node.data.cinatra_llm, parts.edit.data.cinatra_llm);
+  assert.equal(node.data.agent_id, "wordpress-content-editor");
+  assert.deepEqual(node.data.cinatra_llm, { preferredProvider: "openai", preferredModel: "gpt-5.5" });
   assert.equal(node.data.agent_run_id, "{{ agent_run_id }}");
   assert.ok(titles(node.inputs).includes("agent_run_id"), `${id} declares agent_run_id`);
   assert.equal(node.metadata.cinatra.riskClass, "read_only");
@@ -78,10 +100,15 @@ const assertBridgeNode = (id) => {
   return node;
 };
 
-// A COPY, as plain JavaScript, of `framableAddress` and `parseCmsPage` from
-// src/cms-page-model.ts of @cinatra-ai/cms-snapshot-artifact at commit
-// 1fc58a05c93c4d1c431110b00f18dbdf9a9d4216 — the display's own reading of the
-// form this flow files.
+// ---------------------------------------------------------------------------
+// A COPY of the display's form reader, as plain JavaScript, from
+// cinatra-ai/website-artifacts src/cms-page-model.ts (the file as last changed
+// at 86aeea92f768c85acceeed67e8e5af9dae334c23, unchanged at 26763267):
+// framableAddress, frameAddress and parseCmsPage with the helpers they call,
+// line for line with the types removed. The pack's own restatement of the
+// parser's rules (`displayReading` in cinatra/tools/reviewed-change.mjs) is
+// compared with this copy below (S3b).
+// ---------------------------------------------------------------------------
 const CMS_PAGE_FORM_MARKER = "cinatraCmsPage";
 const CMS_PAGE_FORM_VERSION = 1;
 const CMS_PAGE_MAX_EXCERPTS = 200;
@@ -92,8 +119,10 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const HTTPS_TEXT = /^https:\/\//i;
+
 function framableAddress(value) {
-  if (typeof value !== "string" || value.length === 0) return null;
+  if (typeof value !== "string" || !HTTPS_TEXT.test(value)) return null;
   let url;
   try {
     url = new URL(value);
@@ -104,6 +133,32 @@ function framableAddress(value) {
   return value;
 }
 
+const LOCAL_NAMES = ["localhost", "local", "internal"];
+
+function frameAddress(value) {
+  const admitted = framableAddress(value);
+  if (admitted === null) return null;
+  let url;
+  try {
+    url = new URL(admitted);
+  } catch {
+    return null;
+  }
+  if (url.port !== "") return null;
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host.startsWith("[")) return null;
+  const labels = host.split(".");
+  if (labels.length < 2 || labels.some((label) => label === "")) return null;
+  const top = labels[labels.length - 1];
+  if (/^[0-9]+$/.test(top) || LOCAL_NAMES.includes(top)) return null;
+  if (host === "home.arpa" || host.endsWith(".home.arpa")) return null;
+  return admitted;
+}
+
+function sameWords(a, b) {
+  return a.trim().split(/\s+/).join(" ") === b.trim().split(/\s+/).join(" ");
+}
+
 function parseExcerpt(value) {
   if (!isRecord(value)) return null;
   const { region, position, kind, level, published, proposed } = value;
@@ -111,6 +166,8 @@ function parseExcerpt(value) {
   if (typeof position !== "number" || !Number.isInteger(position) || position < 0) return null;
   if (typeof kind !== "string" || !KINDS.includes(kind)) return null;
   if (typeof published !== "string" || typeof proposed !== "string") return null;
+  // A block whose two sides hold the same words, whitespace aside, is no change.
+  if (sameWords(published, proposed)) return null;
   let headingLevel = null;
   if (kind === "heading") {
     if (level === undefined) headingLevel = 2;
@@ -145,6 +202,10 @@ function parseCmsPage(text) {
   for (const entry of excerpts) {
     const excerpt = parseExcerpt(entry);
     if (excerpt === null) return { ok: false, reason: "malformed" };
+    const previous = parsed[parsed.length - 1];
+    if (previous !== undefined && previous.region === excerpt.region && excerpt.position <= previous.position) {
+      return { ok: false, reason: "malformed" };
+    }
     parsed.push(excerpt);
   }
 
@@ -154,7 +215,7 @@ function parseCmsPage(text) {
       system,
       page: {
         title: page.title,
-        address: framableAddress(page.address),
+        address: frameAddress(page.address),
         cmsAddress: framableAddress(page.cmsAddress),
       },
       readAt: typeof value.readAt === "string" ? value.readAt : null,
@@ -163,15 +224,15 @@ function parseCmsPage(text) {
   };
 }
 
-// The display's WordPress fixture form, copied from tests/cms-page-fixture.ts
-// (lines 9-57) of the same package at the same commit.
+// The display's WordPress fixture form, as tests/cms-page-fixture.ts of the
+// same package at the same commit builds it (WORDPRESS_FORM).
 const WORDPRESS_FIXTURE_FORM = {
   cinatraCmsPage: 1,
   system: "wordpress",
   page: {
     title: "Pricing — 2026 plans",
     address: "https://acme.example/pricing",
-    cmsAddress: "https://acme.example/wp-admin/post.php?post=42&action=edit",
+    cmsAddress: null,
   },
   readAt: "2026-09-29T10:00:00.000Z",
   excerpts: [
@@ -204,81 +265,177 @@ test("S1: the flow runs one road from the read through the review to the write",
   assert.deepEqual(
     oas.nodes.map((n) => n.$component_ref),
     ROAD,
-    "the nine steps, in this order",
+    "the sixteen steps, in this order",
   );
   for (const id of ROAD) assert.ok(parts[id], `the step ${id} is defined`);
+  const edges = oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.from_branch ?? null, e.to_node.$component_ref]);
   assert.deepEqual(
-    oas.control_flow_connections.map((e) => [e.from_node.$component_ref, e.to_node.$component_ref]),
-    ROAD.slice(0, -1).map((id, index) => [id, ROAD[index + 1]]),
-    "the eight control edges, in this order, with no branch",
+    [...edges].sort(),
+    [...CONTROL_EDGES].sort(),
+    "the one road with a change, one branch that takes a change of nothing past the filing and the review to the output, and the branches of the site's answer",
   );
-  assert.ok(ROAD.indexOf("edit") > ROAD.indexOf(GATE), "the write step comes after the review");
+  assert.ok(ROAD.indexOf("write_page") > ROAD.indexOf(GATE), "the write step comes after the review");
 });
 
-test("S2: the read step reads the page and writes nothing", () => {
-  const node = assertBridgeNode("read_page");
-  assert.equal("toolbox_ids" in node.data, false, "the read step keeps the default tool offer");
-  const system = node.data.system;
-  for (const word of ["ewpa/get-post", "ewpa/get-page", "wordpress_site_tool_call"])
-    assert.ok(system.includes(word), `the read step names ${word}`);
-  for (const word of ["ewpa/update-post", "ewpa/create-post"])
-    assert.equal(system.includes(word), false, `the read step never names ${word}`);
-  assert.deepEqual(titles(node.outputs), [
-    "postId",
-    "instanceId",
-    "postType",
-    "title",
-    "content",
-    "excerpt",
-    "status",
-    "address",
-    "error",
-  ]);
-  for (const title of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address"])
-    assert.equal(find(node.outputs, title).type, "string", `${title} is a string`);
+test("S2: the read step reads the page and writes nothing, and its check hands the read on", () => {
+  const node = parts.read_page;
+  assert.equal(node.component_type, "ApiNode");
+  assert.ok(node.url.endsWith("/api/agents/passthrough"), "the read runs without a model");
+  assert.equal(node.data.tool, "wordpress_site_tool_call");
+  assert.equal(node.data.input.toolName, "cinatra/post-read");
+  assert.equal(node.metadata.cinatra.riskClass, "read_only");
+  for (const word of ["ewpa/update-post", "ewpa/create-post", "wordpress_site_tool_write", "cinatra/post-update-if-unchanged"])
+    assert.equal(JSON.stringify(node.data).includes(word), false, `the read step never names ${word}`);
+  for (const input of ["instanceId", "postId"]) assertEdgeFrom("read_page", input, "check_input");
+  assertEdgeFrom("read_page", "agent_run_id", "start", "cinatra_run_id");
+  const check = parts.check_read;
+  assert.deepEqual(titles(check.outputs), ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "rowToken", "error", "ok"]);
+  for (const title of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "rowToken"])
+    assert.equal(find(check.outputs, title).type, "string", `${title} is a string`);
+  assert.deepEqual(Object.keys(members(find(check.outputs, "error"))).sort(), ["code", "message"]);
+  assert.equal(check.data.input.input.op, "page");
+});
+
+test("S3: the compose step answers the values to save, and the filed form shows each saved change as it is saved", async () => {
+  const node = assertBridgeNode("compose_change");
+  assert.deepEqual(node.data.toolbox_ids, [], "no tool joins the compose step");
+  assert.deepEqual(titles(node.outputs), ["pageTitle", "pageForm", "error"]);
+  assert.equal(find(node.outputs, "pageTitle").type, "string");
   const error = find(node.outputs, "error");
   assert.equal(error.type, "object");
   assert.deepEqual(Object.keys(members(error)).sort(), ["code", "message"]);
-  for (const input of ["instanceId", "postId", "postType"]) assertEdgeFrom("read_page", input, "start");
-  assertEdgeFrom("read_page", "agent_run_id", "start", "cinatra_run_id");
-});
-
-test("S3: the compose step answers the proposed fields and the page form the display reads", () => {
-  const node = assertBridgeNode("compose_change");
-  assert.deepEqual(node.data.toolbox_ids, [], "no tool joins the compose step");
-  assert.deepEqual(titles(node.outputs), ["pageTitle", "proposedFields", "pageForm"]);
-  assert.equal(find(node.outputs, "pageTitle").type, "string");
-
-  const proposed = find(node.outputs, "proposedFields");
-  assert.equal(proposed.type, "object");
-  assert.deepEqual(Object.keys(members(proposed)).sort(), ["content", "excerpt", "title"]);
 
   const form = find(node.outputs, "pageForm");
   assert.equal(form.type, "object");
   const formMembers = members(form);
-  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "excerpts", "page", "system"]);
-  assert.deepEqual(Object.keys(members(formMembers.page)).sort(), ["address", "cmsAddress", "title"]);
+  assert.deepEqual(Object.keys(formMembers).sort(), ["cinatraCmsPage", "system", "writeFields"], "the compose step answers no excerpts and no page record");
+  assert.deepEqual(Object.keys(members(formMembers.writeFields)).sort(), ["content", "excerpt", "title"]);
+  for (const field of ["content", "excerpt", "title"])
+    assert.deepEqual(members(formMembers.writeFields)[field], { type: ["string", "null"] }, `writeFields.${field} is a string or null`);
+  const filed = members(find(parts.file_page.inputs, "pageForm"));
+  assert.deepEqual(Object.keys(members(filed.page)).sort(), ["address", "cmsAddress", "postId", "status", "title"]);
   assert.deepEqual(
-    Object.keys(members(items(formMembers.excerpts))).sort(),
+    Object.keys(members(items(filed.excerpts))).sort(),
     ["kind", "level", "position", "proposed", "published", "region"],
   );
 
   assertEdgeFrom("compose_change", "instructions", "start");
-  for (const output of titles(parts.read_page.outputs)) assertEdgeFrom("compose_change", output, "read_page");
+  for (const output of ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "error"])
+    assertEdgeFrom("compose_change", output, "check_read");
 
   const system = node.data.system;
   const begin = system.indexOf(EXAMPLE_BEGIN);
   const end = system.indexOf(EXAMPLE_END);
   assert.ok(begin >= 0 && end > begin, "the compose step's text carries one example form between its markers");
   assert.equal(system.indexOf(EXAMPLE_BEGIN, begin + 1), -1, "exactly one example form");
-  const example = parseCmsPage(system.slice(begin + EXAMPLE_BEGIN.length, end).trim());
-  assert.equal(example.ok, true, `the example form parses: ${JSON.stringify(example)}`);
+  const exampleForm = JSON.parse(system.slice(begin + EXAMPLE_BEGIN.length, end).trim());
+  assert.equal("readAt" in exampleForm, false);
+  assert.equal("excerpts" in exampleForm, false, "the example form carries no excerpts");
+  assert.deepEqual(Object.keys(exampleForm.writeFields).sort(), ["content", "excerpt", "title"], "the example form carries writeFields");
+  assert.equal(exampleForm.writeFields.excerpt, null, "a field that does not change is null");
+
+  // The binding: the form the tool derives from the example's values and the
+  // post as read is the form the display reads, its excerpts show every saved
+  // change as source text, and the blocks they do not show are the post as read.
+  const read = {
+    title: "Opening hours",
+    content:
+      "<h2>When we are open</h2><p>We are open Monday to Friday.</p><p>Call ahead on public holidays.</p><ul><li>Monday to Friday: 9 to 18</li><li>Saturday: closed</li></ul>",
+    excerpt: "",
+  };
+  const { extensionTool } = await import("../cinatra/tools/reviewed-change.mjs");
+  const { pageForm } = await extensionTool({
+    input: {
+      op: "form",
+      pageForm: JSON.stringify(exampleForm),
+      postId: JSON.stringify("42"),
+      readPostId: JSON.stringify("42"),
+      title: JSON.stringify(read.title),
+      content: JSON.stringify(read.content),
+      excerpt: JSON.stringify(read.excerpt),
+      status: JSON.stringify("publish"),
+      modified: JSON.stringify("2026-11-20 10:00:00"),
+      rowToken: JSON.stringify("a".repeat(64)),
+      address: JSON.stringify("https://example.org/opening-hours/"),
+      error: JSON.stringify({ code: "", message: "" }),
+    },
+    ports: {},
+  });
+  const example = parseCmsPage(JSON.stringify(pageForm));
+  assert.equal(example.ok, true, `the derived form parses: ${JSON.stringify(example)}`);
   assert.equal(example.page.system, "wordpress");
-  assert.equal("readAt" in JSON.parse(system.slice(begin + EXAMPLE_BEGIN.length, end).trim()), false);
+  assert.deepEqual(example.page.page, {
+    title: "Opening hours",
+    address: "https://example.org/opening-hours/",
+    cmsAddress: null,
+  }, "the display draws the addresses built from the read");
+  assert.deepEqual(pageForm.writeFields, exampleForm.writeFields, "the filed values are the composed values");
+  assert.deepEqual(pageForm.excerpts.map((e) => e.region), ["title", "content", "content"]);
+  assert.equal(pageForm.excerpts[0].proposed, exampleForm.writeFields.title, "the shown title is the saved title");
+  let rebuilt = read.content;
+  for (const excerpt of pageForm.excerpts.filter((e) => e.region === "content")) {
+    assert.ok(excerpt.published.length > 0 && rebuilt.includes(excerpt.published));
+    rebuilt = rebuilt.replace(excerpt.published, excerpt.proposed);
+  }
+  assert.equal(rebuilt, exampleForm.writeFields.content, "the shown blocks are the whole difference between the post as read and the saved content");
 
   const fixture = parseCmsPage(JSON.stringify(WORDPRESS_FIXTURE_FORM));
   assert.equal(fixture.ok, true, "the display's WordPress fixture form parses under the same copy");
   assert.equal(fixture.page.system, "wordpress");
+});
+
+// The pack restates the parser's rules in `displayReading`, which the form
+// step and the read-back apply through one check. Its answer equals the copy's
+// on the fixture, on a built form and on each rule the parser applies.
+test("S3b: the pack's restatement of the display's parser answers what the parser answers", async () => {
+  const { displayReading } = await import("../cinatra/tools/reviewed-change.mjs");
+  const base = WORDPRESS_FIXTURE_FORM;
+  const [heading, paragraph] = base.excerpts;
+  const cases = {
+    "the fixture": base,
+    "not an object": "x",
+    "null": null,
+    "a list": [base],
+    "no marker": { ...base, cinatraCmsPage: undefined },
+    "another version": { ...base, cinatraCmsPage: 2 },
+    "the version as text": { ...base, cinatraCmsPage: "1" },
+    "no excerpts": { ...base, excerpts: undefined },
+    "an empty list of excerpts": { ...base, excerpts: [] },
+    "excerpts that are not a list": { ...base, excerpts: "x" },
+    "201 excerpts": { ...base, excerpts: Array.from({ length: 201 }, (_, i) => ({ ...paragraph, position: i })) },
+    "200 excerpts": { ...base, excerpts: Array.from({ length: 200 }, (_, i) => ({ ...paragraph, position: i })) },
+    "another system": { ...base, system: "joomla" },
+    "no system": { ...base, system: undefined },
+    "no page record": { ...base, page: undefined },
+    "a page record that is a list": { ...base, page: [] },
+    "a title that is not text": { ...base, page: { ...base.page, title: 3 } },
+    "an empty title": { ...base, page: { ...base.page, title: "" } },
+    "extra keys in the page record": { ...base, page: { ...base.page, postId: "42", status: "draft" } },
+    "addresses the display refuses": { ...base, page: { ...base.page, address: "http://x", cmsAddress: "javascript:x" } },
+    "no region": { ...base, excerpts: [{ ...paragraph, region: "" }] },
+    "a region that is not text": { ...base, excerpts: [{ ...paragraph, region: 1 }] },
+    "a negative position": { ...base, excerpts: [{ ...paragraph, position: -1 }] },
+    "a fractional position": { ...base, excerpts: [{ ...paragraph, position: 0.5 }] },
+    "a position as text": { ...base, excerpts: [{ ...paragraph, position: "1" }] },
+    "another kind": { ...base, excerpts: [{ ...paragraph, kind: "quote" }] },
+    "a side that is not text": { ...base, excerpts: [{ ...paragraph, published: null }] },
+    "the same words": { ...base, excerpts: [{ ...paragraph, proposed: ` ${paragraph.published}  ` }] },
+    "a heading without a level": { ...base, excerpts: [{ ...heading, level: undefined }] },
+    "a heading level 0": { ...base, excerpts: [{ ...heading, level: 0 }] },
+    "a heading level 7": { ...base, excerpts: [{ ...heading, level: 7 }] },
+    "a heading level null": { ...base, excerpts: [{ ...heading, level: null }] },
+    "a heading level as text": { ...base, excerpts: [{ ...heading, level: "1" }] },
+    "a level on a paragraph": { ...base, excerpts: [{ ...paragraph, level: 9 }] },
+    "an entry that is not an object": { ...base, excerpts: ["x"] },
+    "positions that do not rise": { ...base, excerpts: [paragraph, { ...paragraph, position: 1 }] },
+    "equal positions in one region": { ...base, excerpts: [paragraph, { ...paragraph }] },
+    "equal positions in two regions": { ...base, excerpts: [paragraph, { ...paragraph, region: "excerpt" }] },
+  };
+  for (const [name, form] of Object.entries(cases)) {
+    const copy = parseCmsPage(JSON.stringify(form));
+    const pack = displayReading(JSON.parse(JSON.stringify(form) ?? "null"));
+    assert.deepEqual(pack, copy.ok ? { ok: true } : { ok: false, reason: copy.reason }, name);
+  }
 });
 
 test("S4: the filing step files the page snapshot, and the manifest declares what the flow produces", () => {
@@ -298,9 +455,10 @@ test("S4: the filing step files the page snapshot, and the manifest declares wha
     "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",
   );
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
-  assertEdgeFrom("file_page", "pageTitle", "read_page", "title");
+  assertEdgeFrom("file_page", "pageTitle", "check_read", "title");
   assert.equal(edgesInto("file_page", "pageTitle").length, 1, "the filed title has one source, the read step");
-  assertEdgeFrom("file_page", "pageForm", "compose_change");
+  assertEdgeFrom("file_page", "pageForm", "form_page");
+  assertEdgeFrom("form_page", "pageForm", "compose_change");
   assertEdgeFrom("file_page", "cinatra_run_id", "start");
   assert.deepEqual(titles(node.outputs), ["artifactId", "representationRevisionId"]);
   assert.equal(node.metadata.cinatra.riskClass, "write");
@@ -345,7 +503,7 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
   assert.equal(gate.component_type, "InputMessageNode");
   assert.equal(find(gate.inputs, "reviewTargets")?.type, "string");
   assert.ok(find(gate.inputs, "pageTitle"), "the review step declares pageTitle");
-  assertEdgeFrom(GATE, "pageTitle", "read_page", "title");
+  assertEdgeFrom(GATE, "pageTitle", "check_read", "title");
   assert.equal(edgesInto(GATE, "pageTitle").length, 1, "the title the review shows has one source, the read step");
   assert.deepEqual(titles(gate.outputs), ["pageReviewNote"]);
   assert.equal(gate.metadata.cinatra.a2uiSurfaceId, "wordpress-agent:page-review");
@@ -382,31 +540,69 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
   assert.deepEqual(messageNodes, [GATE], "exactly one InputMessageNode in the flow");
 });
 
-test("S6: the write step follows the review and takes the reviewed page snapshot as its subject", () => {
-  const node = parts.edit;
-  assert.ok(node, "the write step keeps its id");
+test("S6: the write step follows the review and saves only the reviewed page snapshot's values", () => {
+  const node = parts.write_page;
+  assert.ok(node, "the flow carries the write step");
   assert.deepEqual(
-    controlInto("edit").map((e) => e.from_node.$component_ref),
-    [GATE],
-    "the only control edge into the write step comes from the review",
+    controlInto("write_page").map((e) => e.from_node.$component_ref),
+    ["read_reviewed_page"],
+    "the only control edge into the write step comes from the read of the reviewed revision",
   );
-  assertEdgeFrom("edit", "artifactId", "file_page");
-  assertEdgeFrom("edit", "representationRevisionId", "file_page");
-  assertEdgeFrom("edit", "proposedFields", "compose_change");
-  assert.ok(node.data.system.includes("ewpa/update-post"), "the write step names ewpa/update-post");
-  const step1 = node.data.system.split("**STEP 1")[1]?.split("**STEP 2")[0] ?? "";
-  assert.match(step1, /already read the post/, "Step 1 takes the post the read step read");
-  assert.match(step1, /Make no read call/, "Step 1 makes no read call");
-  assert.match(step1, /If `status` is empty/, "a failed read is told by an empty status");
-  assert.doesNotMatch(step1, /If `content` is empty/, "an empty body is never a failed read");
-  assert.doesNotMatch(node.data.system, /Read the post first|call `ewpa\/get-post` \/ `ewpa\/get-page` first/, "no text orders a read before the write");
-  const step2 = node.data.system.split("**STEP 2")[1]?.split("**STEP 3")[0] ?? "";
-  assert.match(step2, /The values you write are the members of `proposedFields`/, "the write takes proposedFields");
-  assert.deepEqual(titles(node.outputs), RUN_OUTPUTS, "the write step keeps its six outputs");
+  for (const input of ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot"])
+    assertEdgeFrom("write_page", input, "read_reviewed_page");
+  for (const gone of ["artifactId", "representationRevisionId", "reviewedPage", "reviewedTruncated", "proposedFields", "instructions"])
+    assert.equal(find(node.inputs, gone), undefined, `the write step takes no ${gone}`);
+  assert.deepEqual(
+    oas.data_flow_connections
+      .filter((e) => e.destination_node.$component_ref === "write_page" && e.source_node.$component_ref === "compose_change")
+      .map((e) => e.destination_input),
+    [],
+    "no edge carries a value from the compose step to the write step around the review",
+  );
+  assert.equal(node.data.input.toolName, "cinatra/post-update-if-unchanged");
+  assert.equal(JSON.stringify(node.data).includes("ewpa/update-post"), false, "the write step no longer names the unconditional update");
+});
+
+test("S9: the approved revision is read back after the review, by the revision id the review's answer names", () => {
+  const node = parts.read_reviewed_page;
+  assert.ok(node, "the flow carries the read of the reviewed revision");
+  assert.equal(node.component_type, "ApiNode");
+  assert.ok(node.url.endsWith("/api/agents/passthrough"));
+  assert.equal(node.data.tool, "extension_tool");
+  assert.equal(node.data.input.name, "reviewed_change");
+  assert.equal(node.data.input.input.op, "read");
+  assert.equal(node.data.input.input.artifactId, "{{ artifactId }}");
+  assert.equal(
+    node.data.input.input.reviewAnswer,
+    "{# pyagentspec-input-hint (do not remove): {{ reviewAnswer }} #}{{ reviewAnswer | tojson }}",
+    "the answer reaches the tool as JSON text, which the tool parses",
+  );
+  assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
+  assertEdgeFrom("read_reviewed_page", "artifactId", "file_page");
+  assertEdgeFrom("read_reviewed_page", "reviewAnswer", GATE, "pageReviewNote");
+  assertEdgeFrom("read_reviewed_page", "cinatra_run_id", "start");
+  for (const field of ["title", "content", "excerpt"]) assertEdgeFrom("read_reviewed_page", field, "check_read");
+  assert.equal(edgeInto("read_reviewed_page", "representationRevisionId"), undefined, "the filed revision is never the one read");
+  assert.deepEqual(titles(node.outputs), ["reviewedTitle", "reviewedTitleSet", "reviewedContent", "reviewedExcerpt", "reviewedRevisionId", "reviewedSnapshot", "ok"]);
+  assert.deepEqual(
+    controlInto("read_reviewed_page").map((e) => e.from_node.$component_ref),
+    [GATE],
+    "the read follows the review directly",
+  );
+  assert.equal(node.metadata.cinatra.riskClass, "read_only");
+  assert.equal(node.metadata.cinatra.requiresApproval, false);
+  assert.equal("publishes" in node.metadata.cinatra, false);
+  // The revision the review is opened on is the filed one; the revision read is the approved one.
+  const template = parts.gather_page_review.data.input.input.reviewTargets;
+  assert.ok(template.includes("{{ pageRevisionId }}"));
+  assertEdgeFrom("gather_page_review", "pageRevisionId", "file_page", "representationRevisionId");
 });
 
 test("S7: the declared module hands the review set to the application and touches nothing else", async () => {
-  assert.deepEqual(pkg.cinatra.tools, [{ name: "review_targets", module: "./cinatra/tools/review-targets.mjs" }]);
+  assert.deepEqual(pkg.cinatra.tools, [
+    { name: "review_targets", module: "./cinatra/tools/review-targets.mjs" },
+    { name: "reviewed_change", module: "./cinatra/tools/reviewed-change.mjs" },
+  ]);
   const { extensionTool } = await import("../cinatra/tools/review-targets.mjs");
   assert.equal(typeof extensionTool, "function");
 
@@ -448,7 +644,7 @@ test("S8: the page snapshot is filed during the run, and the end node binds no a
     );
   assert.deepEqual(filings, ["file_page"], "one mid-run filing of the page snapshot");
   const endOutputs = parts.end.outputs;
-  assert.deepEqual(titles(endOutputs), RUN_OUTPUTS, "the end node keeps the six run outputs");
+  assert.deepEqual(titles(endOutputs), [...RUN_OUTPUTS, "message"], "the end node keeps the six run outputs, and the message of a change of nothing");
   assert.deepEqual(
     endOutputs.filter((o) => o.cinatra?.artifact).map((o) => o.title),
     [],
@@ -460,7 +656,12 @@ test("S8: the page snapshot is filed during the run, and the end node binds no a
     "no flow output carries a binding",
   );
   for (const output of RUN_OUTPUTS) {
-    assertEdgeFrom("end", output, "edit");
-    assertEdgeFrom("emit_output", output, "edit");
+    for (const node of ["end", "emit_output"]) {
+      assert.deepEqual(
+        edgesInto(node, output).map((e) => e.source_node.$component_ref).sort(),
+        ["no_change_outcome", "write_outcome"],
+        `${node}.${output} comes from the outcome of the write or of a change of nothing`,
+      );
+    }
   }
 });

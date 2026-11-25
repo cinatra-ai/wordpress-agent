@@ -1,8 +1,8 @@
 {
   "name": "@cinatra-ai/wordpress-agent",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "Apache-2.0",
-  "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
+  "description": "Edits WordPress posts and pages from natural language: a person reviews the change, which is saved only if the post is unchanged.",
   "type": "module",
   "scripts": {
     "test": "sh -c \"node --test\""
@@ -20,7 +20,7 @@
         "edgeType": "runtime",
         "versionConstraint": {
           "kind": "semver-range",
-          "range": "^0.1.4"
+          "range": "^0.1.10"
         },
         "requirement": "required",
         "kind": "connector"
@@ -60,6 +60,10 @@
       {
         "name": "review_targets",
         "module": "./cinatra/tools/review-targets.mjs"
+      },
+      {
+        "name": "reviewed_change",
+        "module": "./cinatra/tools/reviewed-change.mjs"
       }
     ],
     "lifecycle": {
