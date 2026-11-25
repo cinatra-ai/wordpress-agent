@@ -402,6 +402,17 @@
     },
     {
       "component_type": "ControlFlowEdge",
+      "name": "route_write_write_outcome_unknown_to_emit_output",
+      "from_node": {
+        "$component_ref": "route_write"
+      },
+      "from_branch": "write_outcome_unknown",
+      "to_node": {
+        "$component_ref": "emit_output"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
       "name": "route_write_default_to_emit_output",
       "from_node": {
         "$component_ref": "route_write"
@@ -1943,6 +1954,18 @@
         "$component_ref": "write_outcome"
       },
       "destination_input": "status"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "check_read_to_write_outcome_address",
+      "source_node": {
+        "$component_ref": "check_read"
+      },
+      "source_output": "address",
+      "destination_node": {
+        "$component_ref": "write_outcome"
+      },
+      "destination_input": "address"
     },
     {
       "component_type": "DataFlowEdge",
@@ -3628,23 +3651,35 @@
         },
         {
           "title": "post_title",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_content",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_excerpt",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_status",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_modified_gmt",
@@ -3724,7 +3759,7 @@
             }
           ],
           "packageName": "@cinatra-ai/wordpress-agent",
-          "description": "The flow's one publishing step: one model-free call of the connector's write tool, wordpress_site_tool_write, with the site ability cinatra/post-update-if-unchanged, on the host's passthrough road. Saving a change to the site is an external write, so the application stops the run in front of this step and shows its publish card (the site, the title and status as read, and the reviewed page snapshot revision); the run reaches the step only after the person chose to save. Every argument is a template over this step's inputs, each written with tojson, and each input comes by one data edge: the post id, the change time, the title, content, excerpt and status and the row token from the read step, exactly as the site answered them; the values to save and the reviewed revision from the read-back of the revision the person approved. No model writes an argument. The site writes only the reviewed fields, and moves a published post to draft in the same save, only if the post is still unchanged since that read (its change time, the four values and the row token); else it refuses with a code and writes nothing. The step returns the site's answer."
+          "description": "The flow's one publishing step: one model-free call of the connector's write tool, wordpress_site_tool_write, with the site ability cinatra/post-update-if-unchanged, on the host's passthrough road. Saving a change to the site is an external write, so the application stops the run in front of this step and shows its publish card (the site, the title and status as read, and the reviewed page snapshot revision); the run reaches the step only after the person chose to save. Every argument is a template over this step's inputs, each written with tojson, and each input comes by one data edge: the post id, the change time, the title, content, excerpt and status and the row token from the read step, exactly as the site answered them; the values to save and the reviewed revision from the read-back of the revision the person approved. No model writes an argument. The site writes only the reviewed fields, and moves a published post to draft in the same save, only if the post is still unchanged since that read (its change time, the four values and the row token); else it refuses with a code and writes nothing; when it cannot confirm its own save it says so (write_outcome_unknown). The step returns the site's answer."
         }
       }
     },
@@ -3755,6 +3790,7 @@
             "content": "{# pyagentspec-input-hint (do not remove): {{ content }} #}{{ content | tojson }}",
             "excerpt": "{# pyagentspec-input-hint (do not remove): {{ excerpt }} #}{{ excerpt | tojson }}",
             "status": "{# pyagentspec-input-hint (do not remove): {{ status }} #}{{ status | tojson }}",
+            "address": "{# pyagentspec-input-hint (do not remove): {{ address }} #}{{ address | tojson }}",
             "reviewedTitle": "{# pyagentspec-input-hint (do not remove): {{ reviewedTitle }} #}{{ reviewedTitle | tojson }}",
             "reviewedTitleSet": "{# pyagentspec-input-hint (do not remove): {{ reviewedTitleSet }} #}{{ reviewedTitleSet | tojson }}",
             "reviewedContent": "{# pyagentspec-input-hint (do not remove): {{ reviewedContent }} #}{{ reviewedContent | tojson }}",
@@ -3782,23 +3818,35 @@
         },
         {
           "title": "post_title",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_content",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_excerpt",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "post_status",
-          "type": "string",
-          "default": ""
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         {
           "title": "sanitized_fields",
@@ -3843,6 +3891,11 @@
         },
         {
           "title": "status",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "address",
           "type": "string",
           "default": ""
         },
@@ -3960,7 +4013,7 @@
           "riskClass": "read_only",
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
-          "description": "The agent reads the site's answer to the save by code and builds the run's output: on a save, each saved field with its value before and the value the site stored; on post_changed, the way back to the read and a notice for the next review; on any other refusal, its code and a plain message (nothing was written). When the site did not confirm whether the save was stored (write_outcome_unknown), or its answer is neither a save nor a refusal, the run fails with the advice to check the post on the site before trying again."
+          "description": "The agent reads the site's answer to the save by code and builds the run's output: on a save whose answer carries every stored field, each equal to what was reviewed (or named by the site as changed by its save filters), each saved field with its value before and the value the site stored; on post_changed, the way back to the read and a notice for the next review; on any other refusal, its code and a plain message (nothing was written). When the site could not confirm its own save (write_outcome_unknown), the run ends with that code and a message that the site may have changed, with the post's link to check it; the save is not tried again. An answer that is neither a complete save nor a code the site documents fails the run with the advice to check the post on the site before trying again."
         }
       }
     },
@@ -3994,7 +4047,8 @@
         "transaction_conflict",
         "not_found",
         "unsupported_storage",
-        "db_error"
+        "db_error",
+        "write_outcome_unknown"
       ],
       "mapping": {
         "written": "written",
@@ -4008,7 +4062,8 @@
         "transaction_conflict": "transaction_conflict",
         "not_found": "not_found",
         "unsupported_storage": "unsupported_storage",
-        "db_error": "db_error"
+        "db_error": "db_error",
+        "write_outcome_unknown": "write_outcome_unknown"
       }
     },
     "no_change_outcome": {

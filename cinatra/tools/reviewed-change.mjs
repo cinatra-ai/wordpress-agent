@@ -56,7 +56,7 @@
  * named `ExtensionToolCallRefusal` whose message is one sentence that starts
  * with its code (`post_read_unavailable` for `page`, `page_form_unavailable`
  * for `form` and `unchanged`, `reviewed_change_unavailable` for `read`,
- * `write_answer_unreadable` or `write_outcome_unknown` for `outcome`). The step and the run fail; before
+ * `write_answer_unreadable` for `outcome`). The step and the run fail; before
  * the write, the write step never runs. It reads no port but the artifact read, and writes no
  * port, no table and no artifact.
  */
@@ -68,17 +68,24 @@ export const PAGE_CODE = "post_read_unavailable";
 export const INPUT_CODE = "run_input_invalid";
 export const OUTCOME_CODE = "write_answer_unreadable";
 /**
- * The site's answer that the database did not confirm the save and the change
- * may or may not be stored. Unlike every refusal in `WRITE_REFUSALS`, nothing
- * is known about the post: the run fails with this code and never says that
- * nothing was written.
+ * The site's answer that it could not show its own transaction intact to the
+ * end of the save (`data.site_changes_possible` true, `data.cause` `matches`,
+ * `differs` or `unreadable`): the change may or may not be stored, and site
+ * code may have changed other parts of the site. Unlike every refusal in
+ * `WRITE_REFUSALS`, nothing is known about the post: the run ends on its own
+ * branch, tells the person that the site may have changed and to check the
+ * post at its link, never says that nothing was written or that the change
+ * was saved, and never tries the save again.
  */
 export const OUTCOME_UNKNOWN_CODE = "write_outcome_unknown";
 
 /**
  * The refusal codes of the site ability `cinatra/post-update-if-unchanged`
  * other than `post_changed` and `write_outcome_unknown`, each with the plain
- * message the run ends with. After each of them nothing was written. Every code
+ * message the run ends with. The site answers each of them only when it showed
+ * its own transaction intact to the end, or before it started one, so after
+ * each of them nothing was written (cinatra-ai/wordpress-plugin PR #120, head
+ * 5644e711, `cinatra_content_end()`). Every code
  * the ability answers has an explicit entry here, or is `post_changed` (the way
  * back to the read) or `write_outcome_unknown` (`OUTCOME_UNKNOWN_CODE`).
  */
@@ -93,20 +100,12 @@ export const WRITE_REFUSALS = {
   empty_content:
     "Nothing was written: the change would have left the post empty, or the site's own rules count the result as empty. Ask for a change that keeps some content.",
   transaction_conflict:
-    "Nothing was written: the site's database has another transaction open, lost the transaction of this save, or is set so that this save cannot run on its own. Try again later; if it keeps happening, check the site's database settings and plugins.",
+    "Nothing was written: the site's database could not give this save a transaction of its own (another transaction is open, the call came from inside a save, or the database session's settings do not allow it), so the save did not start. Try again later; if it keeps happening, check the site's database settings and plugins.",
   not_found: "Nothing was written: the post no longer exists, or this account may no longer edit it.",
-  unsupported_storage: "Nothing was written: the site's database cannot lock a post row (the posts table does not use InnoDB).",
-  db_error: "Nothing was written: the site's database refused the save. Start a new run later.",
+  unsupported_storage:
+    "Nothing was written: the site's database cannot run this save safely (the posts table does not use InnoDB, or the database does not report what the save needs to show that it owns its transaction).",
+  db_error: "Nothing was written: the site's database could not run the save (for example another save held the post too long). Start a new run later.",
 };
-
-/**
- * `transaction_conflict` with `data.site_changes_possible` exactly true: this
- * save did not change the post, but the site's own save code ran during the
- * attempt and may have stored changes of its own. It must not say that nothing
- * was written, so it replaces the message of `WRITE_REFUSALS.transaction_conflict`.
- */
-const SITE_CHANGES_POSSIBLE =
-  "The post itself was not changed by this save, but other parts of the site may have been changed by the site's own code during the attempt. Check the post and the site before trying again.";
 
 /** Added to the message of a refusal that says the site's cache may still serve the post as it was. */
 const CACHE_STALE_NOTE = "The site may still show an outdated copy of the post for a while.";
@@ -162,7 +161,6 @@ const REFUSAL_WORDS = {
   [PAGE_CODE]: ["no change was written", "start a new run"],
   [INPUT_CODE]: ["nothing was read from the site", "start a new run with a valid post and site"],
   [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
-  [OUTCOME_UNKNOWN_CODE]: ["the site did not confirm whether the change was stored", "check the post, its revisions and the site's caches before trying again"],
 };
 
 class Refusal extends Error {
@@ -1121,23 +1119,34 @@ function changedParts(data) {
  *   person on the next review that the change was proposed again against the
  *   current post, naming the changed parts the site named.
  * - each other refusal code of the ability (`WRITE_REFUSALS`): nothing was
- *   written; the run ends completed with `error` and its plain message. The
- *   one exception is `transaction_conflict` with `data.site_changes_possible`
- *   exactly true: the post was not changed by this save, but the site's own
- *   code may have changed other parts of the site, so its message does not say
- *   that nothing was written.
- * - `write_outcome_unknown`: the site did not confirm whether the change was
- *   stored (`data.cause` `unreadable`, `matches` or `differs`; with `matches`
- *   the post shows the change, but the site's after-save steps did not run).
- *   The run fails with that code, and its message never says that nothing was
- *   written or that the change was saved: the person checks the post, its
- *   revisions and the site's caches before trying again.
+ *   written; the run ends completed with `error` and its plain message.
+ * - `write_outcome_unknown` (`OUTCOME_UNKNOWN_CODE`): the site could not
+ *   confirm its own save. The run ends on its own branch with that code; the
+ *   message says, per `data.cause`, that the site may have changed (with
+ *   `matches`: the site reports the page now holds the reviewed content, but
+ *   could not confirm its own save), that other parts of the site may also
+ *   have changed, and to check the page at its link (the address as read, or
+ *   the post id); it never says that nothing was written or that the change
+ *   was saved. The flow never tries the save again after it.
  * - On a refusal, `data.cache_stale` exactly true adds one sentence: the site
  *   may still show an outdated copy of the post.
  *
+ * `written` requires every stored field the comparison needs as its own field
+ * of the answer with its type: the post id, and the title, content, excerpt
+ * and status as texts. A field the answer lacks reaches this step as null
+ * (the runtime's extraction, and the write step's declared default), never as
+ * a text, so it is never read as "matches". Each stored value must equal the
+ * value it should hold: the reviewed value for a field the review saves
+ * (or, when the site names the field in `sanitized_fields`, the value its save
+ * filters made of it), the value as read for a field the review does not save,
+ * and the status the save sets (a published post becomes a draft).
+ *
  * Any other answer is refused (`write_answer_unreadable`): the run fails and
  * tells the person to check the post on the site, because the save's outcome
- * is not known. The site's own text is never repeated.
+ * is not known. So is a refusal code that carries `data.site_changes_possible`
+ * true, which belongs to `write_outcome_unknown` alone, and every code the
+ * site does not answer (also `transaction_lost` and `connection_replaced`,
+ * which earlier plugin heads answered). The site's own text is never repeated.
  */
 function outcome(call) {
   const refuse = (cause) => {
@@ -1150,6 +1159,23 @@ function outcome(call) {
   const code = jsonValue(call.code);
   const data = jsonValue(call.data);
   const stale = cacheStale(data) ? ` ${CACHE_STALE_NOTE}` : "";
+  if (success === false && code === OUTCOME_UNKNOWN_CODE) {
+    const where = `check the page (${pageLink(readText(call.address), postId)})`;
+    const cause = isPlainObject(data) ? data.cause : undefined;
+    const first =
+      cause === "matches"
+        ? `The site reports the page now holds the reviewed content, but could not confirm its own save: ${where}.`
+        : cause === "unreadable"
+          ? `The site may have changed: it could not confirm whether the reviewed change was stored, and it could not read the page back. Before trying again, ${where}.`
+          : cause === "differs"
+            ? `The site may have changed: it could not confirm whether the reviewed change was stored, and the page does not hold exactly the reviewed content (it may still read as before, which does not show that nothing was stored). Before trying again, ${where}.`
+            : `The site may have changed: it could not confirm whether the reviewed change was stored. Before trying again, ${where}.`;
+    const message = `${first} Other parts of the site may also have changed during the attempt. This agent does not try the save again.${stale}`;
+    return { ...base, next: OUTCOME_UNKNOWN_CODE, error: { code: OUTCOME_UNKNOWN_CODE, message }, message };
+  }
+  if (success === false && isPlainObject(data) && data.site_changes_possible === true) {
+    refuse("the site's refusal says that site code may have changed the site, which a refusal after which nothing was written cannot say");
+  }
   if (success === false && code === "post_changed") {
     const parts = changedParts(data);
     const named = parts.length > 0 ? ` (changed: ${parts.join(", ")})` : "";
@@ -1162,21 +1188,8 @@ function outcome(call) {
     };
   }
   if (success === false && typeof code === "string" && Object.prototype.hasOwnProperty.call(WRITE_REFUSALS, code)) {
-    const flagged = code === "transaction_conflict" && isPlainObject(data) && data.site_changes_possible === true;
-    const message = `${flagged ? SITE_CHANGES_POSSIBLE : WRITE_REFUSALS[code]}${stale}`;
+    const message = `${WRITE_REFUSALS[code]}${stale}`;
     return { ...base, next: code, error: { code, message }, message };
-  }
-  if (success === false && code === OUTCOME_UNKNOWN_CODE) {
-    const cause = isPlainObject(data) ? data.cause : undefined;
-    const why =
-      cause === "unreadable"
-        ? "the post could not be read back after the save"
-        : cause === "matches"
-          ? "the post read back shows the change, but the site did not confirm the save and its after-save steps did not run"
-          : cause === "differs"
-            ? "the post read back is neither the post as it was before nor the change"
-            : "the site's answer names no cause this agent knows";
-    throw new Refusal(OUTCOME_UNKNOWN_CODE, `${why}${cacheStale(data) ? ", and the site may still show an outdated copy of the post" : ""}`);
   }
   if (success !== true) refuse("the site's answer is neither a save nor a refusal this agent knows");
   if (!/^[1-9][0-9]*$/.test(postId) || jsonValue(call.post_id) !== Number(postId)) refuse("the site's answer names another post than the run's post");
@@ -1187,17 +1200,24 @@ function outcome(call) {
   }
   const revisionId = readText(call.reviewedRevisionId).trim();
   if (revisionId === "") refuse("the run names no reviewed revision");
+  const sanitizedColumns = (Array.isArray(jsonValue(call.sanitized_fields)) ? jsonValue(call.sanitized_fields) : []).filter(
+    (name) => typeof name === "string" && Object.prototype.hasOwnProperty.call(COLUMN_FIELDS, name),
+  );
   const changes = [];
-  for (const [field, input] of [["title", "reviewedTitle"], ["content", "reviewedContent"], ["excerpt", "reviewedExcerpt"]]) {
-    const saved = field === "title" ? jsonValue(call.reviewedTitleSet) === true : (textInput(call[input]) ?? "") !== "";
-    if (!saved) continue;
-    changes.push({ field, before: textInput(call[field]) ?? "", after: stored[field] });
+  for (const [field, column, input] of [["title", "post_title", "reviewedTitle"], ["content", "post_content", "reviewedContent"], ["excerpt", "post_excerpt", "reviewedExcerpt"]]) {
+    const reviewed = textInput(call[input]) ?? "";
+    const saved = field === "title" ? jsonValue(call.reviewedTitleSet) === true : reviewed !== "";
+    const before = textInput(call[field]) ?? "";
+    const expected = saved ? reviewed : before;
+    if (stored[field] !== expected && !(saved && sanitizedColumns.includes(column))) {
+      refuse(`the site's answer names a stored ${field} other than the ${saved ? "reviewed" : "unchanged"} one`);
+    }
+    if (saved) changes.push({ field, before, after: stored[field] });
   }
   const statusBefore = textInput(call.status) ?? "";
+  if (stored.status !== (statusBefore === "publish" ? "draft" : statusBefore)) refuse("the site's answer names a stored status other than the one the save sets");
   if (stored.status !== statusBefore) changes.push({ field: "status", before: statusBefore, after: stored.status });
-  const sanitized = (Array.isArray(jsonValue(call.sanitized_fields)) ? jsonValue(call.sanitized_fields) : [])
-    .filter((name) => typeof name === "string" && Object.prototype.hasOwnProperty.call(COLUMN_FIELDS, name))
-    .map((name) => COLUMN_FIELDS[name]);
+  const sanitized = sanitizedColumns.map((name) => COLUMN_FIELDS[name]);
   const demoted = statusBefore === "publish" && stored.status === "draft" ? " The post was published; it is now a draft." : "";
   const filtered = sanitized.length > 0 ? ` The site's save filters changed the ${sanitized.join(", ")} as stored.` : "";
   return {
@@ -1207,6 +1227,20 @@ function outcome(call) {
     changes,
     message: `Saved the reviewed change to post ${postId}.${demoted}${filtered}`,
   };
+}
+
+/** The post's link for a message: the address as read when it is an http(s) address without a user name or password, else the post id. */
+function pageLink(address, postId) {
+  const text = address.trim();
+  if (/^https?:\/\/\S+$/.test(text) && text.length <= 2000) {
+    try {
+      const url = new URL(text);
+      if ((url.protocol === "https:" || url.protocol === "http:") && url.username === "" && url.password === "") return text;
+    } catch {
+      // not an address
+    }
+  }
+  return `post ${postId} on the site`;
 }
 
 /**

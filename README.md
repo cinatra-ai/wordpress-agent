@@ -12,7 +12,7 @@ Edit a post or page on a connected WordPress site from a plain instruction — "
 
 **Development.** Start the stack with `docker compose --profile wordpress up -d`. Runs on port 3021; override with `WP_CONTENT_EDITOR_A2A_URL` in `.env.local`.
 
-**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId`, `changes: [{field, before, after}]` (after: the stored value; a demote adds status), `message`. Refused by the site: empty `changes`, `error.code` (the site's refusal code, e.g. `post_locked` or `empty_content`) and a plain `message`; nothing written. Failed runs: `run_input_invalid` (nothing read), `post_read_unavailable`, `page_form_unavailable` (also: change too large), `reviewed_change_unavailable`, `write_answer_unreadable` (check the post), `write_outcome_unknown` (the site did not confirm the save: check the post).
+**API contract.** Inputs (strings): `instanceId`, `postId`, `postType`, `postStatus`, `instructions`. Success: `postId`, `instanceId`, `proposalId`, `changes: [{field, before, after}]` (after: the stored value; a demote adds status), `message`. Refused by the site: empty `changes`, `error.code` (the site's refusal code, e.g. `post_locked` or `empty_content`) and a plain `message`; nothing written. Failed runs: `run_input_invalid` (nothing read), `post_read_unavailable`, `page_form_unavailable` (also: change too large), `reviewed_change_unavailable`, `write_answer_unreadable` (check the post). Error `write_outcome_unknown`: the site may have changed; check the post (no retry).
 
 **Troubleshooting.** A `500` often means an unknown `instanceId`. Empty `changes`, no `error`: no change was proposed; `message` repeats the request.
 

@@ -48,7 +48,7 @@ const ROAD = [
 ];
 // The one road with a change, and the road of a request that changes nothing.
 const REVIEW_ROAD = ROAD.filter((id) => id !== "no_change_outcome" && id !== "route_write");
-const WRITE_ENDS = ["written", "site_policy_conflict", "permission_unverified", "post_locked", "unsupported_status", "invalid", "empty_content", "transaction_conflict", "not_found", "unsupported_storage", "db_error", "default"];
+const WRITE_ENDS = ["written", "site_policy_conflict", "permission_unverified", "post_locked", "unsupported_status", "invalid", "empty_content", "transaction_conflict", "not_found", "unsupported_storage", "db_error", "write_outcome_unknown", "default"];
 const CONTROL_EDGES = [
   ...REVIEW_ROAD.slice(0, -1)
     .filter((id) => id !== "write_outcome")
