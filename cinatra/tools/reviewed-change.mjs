@@ -576,7 +576,26 @@ function form(call) {
 
 // --- unchanged ---------------------------------------------------------------
 
-/** The outcome of a request that changes nothing: the post, no changes, no error. */
+/** The most characters of the request the no-change message repeats. */
+export const REQUEST_MAX = 300;
+
+/** The most characters of the post's title the no-change message repeats. */
+const TITLE_MAX = 120;
+
+/** Text on one line, cut to `max` characters with an ellipsis. */
+function oneLine(text, max) {
+  const line = String(text).replace(/\s+/g, " ").trim();
+  return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * The outcome of a request that changes nothing: the post, no changes, no
+ * error, and a message built here, never by the model. The compose step's
+ * answer is the same for a request that needs no change and for a request it
+ * dropped, and no code can tell the two apart. So the run ends completed, and
+ * the message tells the person that nothing was proposed, reviewed or written
+ * for their request, and repeats the request so they can see it.
+ */
 function unchanged(call) {
   const refuse = (cause) => {
     throw new Refusal(FORM_CODE, cause);
@@ -586,6 +605,9 @@ function unchanged(call) {
   if (composed === undefined) refuse("the compose step answered no page form");
   const writeFields = changedOf(read, writeFieldsOf(composed.writeFields, refuse));
   if (!nothingChanges(writeFields)) refuse("the values to save change the post, which needs the review");
+  const title = oneLine(read.title, TITLE_MAX);
+  const request = oneLine(textInput(call.instructions) ?? "", REQUEST_MAX);
+  const lead = `No change was proposed for this request on post ${read.postId} ("${title}"), so nothing was reviewed or written`;
   return {
     ok: true,
     postId: read.postId,
@@ -594,6 +616,7 @@ function unchanged(call) {
     changeSetId: "",
     changes: [],
     error: {},
+    message: request === "" ? `${lead}; the request was empty.` : `${lead}: ${request}`,
   };
 }
 

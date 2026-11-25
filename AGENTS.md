@@ -66,7 +66,7 @@ All fields are strings. `postId` is a string representation of a numeric ID — 
 }
 ```
 
-Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) ends the run failed at the compose step, before anything is filed, reviewed or shown on the publish card. A request that changes nothing is no error: it ends the run completed with empty `changes` and no `error`, past the filing and the review (see below).
+Emitted when `postType` is neither unset/`"post"` nor `"page"` (code `unsupported_post_type`, no WordPress call made at all). An edit requested for a page (code `page_editing_unsupported`) ends the run failed at the compose step, before anything is filed, reviewed or shown on the publish card. A request that changes nothing is no error: it ends the run completed with empty `changes`, no `error` and a `message`, past the filing and the review (see below).
 
 **Stopped variant** (the run completes, nothing was written, no `proposalId`): `post_changed` when the post's change time or status differs, just before the write, from the read the review was based on (another editor changed, published or unpublished it during the review), and `reviewed_change_unavailable` when the write step is handed no usable reviewed values (a backstop; the step in front of it already fails the run in that case, see below). The `message` says that nothing was written.
 
@@ -80,7 +80,15 @@ The flow is `start` → `read_page` → `compose_change` → `form_page` →
 changes the post, `form_page` answers `next: "no_change"` and the branch
 `route_change` takes the run to `no_change_outcome` (op `unchanged`, which
 checks this again) → `emit_output` → `end`: the run completes with empty
-`changes`, and nothing is filed, reviewed or written.
+`changes` and no `error`, and nothing is filed, reviewed or written. The
+output then carries `message`, built in code (never by the model) from the
+run's `instructions` (a data edge from `start`), the post id and the read
+title: "No change was proposed for this request on post 42 ("Opening
+hours"), so nothing was reviewed or written: <request>", the request
+flattened to one line and cut to 300 characters. The compose step's answer is
+the same for a request already satisfied and for a request the model dropped,
+so no code can tell them apart; the message lets the person see it. On the
+`edit` road `message` stays empty and is left out of the output.
 
 `compose_change` answers the values to save in `pageForm.writeFields`: the
 complete new `title`, `content` and `excerpt`, each a non-empty string or

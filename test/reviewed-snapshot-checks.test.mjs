@@ -303,7 +303,17 @@ test("R3 the steps take the read's values from the read step, and the run's post
 
 test("R4 a successful read that asks for no change still ends the run as a change of nothing", async () => {
   const { extensionTool } = await load();
-  const outcome = { ok: true, postId: "42", instanceId: "site-1", proposalId: "", changeSetId: "", changes: [], error: {} };
+  const told = (title) => ({
+    ok: true,
+    postId: "42",
+    instanceId: "site-1",
+    proposalId: "",
+    changeSetId: "",
+    changes: [],
+    error: {},
+    message: `No change was proposed for this request on post 42 ("${title}"), so nothing was reviewed or written; the request was empty.`,
+  });
+  const outcome = told(READ.title);
   const equal = { title: READ.title, content: READ.content, excerpt: READ.excerpt };
   for (const status of ["publish", "draft", "pending", "private", "future"]) {
     for (const writeFields of [NOTHING, equal]) {
@@ -313,5 +323,5 @@ test("R4 a successful read that asks for no change still ends the run as a chang
     }
   }
   const bare = { ...READ, title: "", content: "", excerpt: "", address: "" };
-  assert.deepEqual(await extensionTool({ input: unchangedCall(NOTHING, bare), ports: {} }), outcome, "a post with no title, body, excerpt or address");
+  assert.deepEqual(await extensionTool({ input: unchangedCall(NOTHING, bare), ports: {} }), told(""), "a post with no title, body, excerpt or address");
 });

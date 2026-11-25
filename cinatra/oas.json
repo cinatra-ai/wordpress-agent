@@ -73,6 +73,11 @@
     {
       "title": "error",
       "type": "object"
+    },
+    {
+      "title": "message",
+      "type": "string",
+      "default": ""
     }
   ],
   "start_node": {
@@ -1156,6 +1161,18 @@
     },
     {
       "component_type": "DataFlowEdge",
+      "name": "start_to_no_change_outcome_instructions",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "instructions",
+      "destination_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "destination_input": "instructions"
+    },
+    {
+      "component_type": "DataFlowEdge",
       "name": "read_page_to_no_change_outcome_title",
       "source_node": {
         "$component_ref": "read_page"
@@ -1405,6 +1422,30 @@
         "$component_ref": "end"
       },
       "destination_input": "error"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_emit_output_message",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "message",
+      "destination_node": {
+        "$component_ref": "emit_output"
+      },
+      "destination_input": "message"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "no_change_outcome_to_end_message",
+      "source_node": {
+        "$component_ref": "no_change_outcome"
+      },
+      "source_output": "message",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "message"
     }
   ],
   "$referenced_components": {
@@ -2519,6 +2560,7 @@
             "postId": "{# pyagentspec-input-hint (do not remove): {{ postId }} #}{{ postId | tojson }}",
             "instanceId": "{# pyagentspec-input-hint (do not remove): {{ instanceId }} #}{{ instanceId | tojson }}",
             "pageForm": "{# pyagentspec-input-hint (do not remove): {{ pageForm }} #}{{ pageForm | tojson }}",
+            "instructions": "{# pyagentspec-input-hint (do not remove): {{ instructions }} #}{{ instructions | tojson }}",
             "title": "{# pyagentspec-input-hint (do not remove): {{ title }} #}{{ title | tojson }}",
             "content": "{# pyagentspec-input-hint (do not remove): {{ content }} #}{{ content | tojson }}",
             "excerpt": "{# pyagentspec-input-hint (do not remove): {{ excerpt }} #}{{ excerpt | tojson }}",
@@ -2581,6 +2623,11 @@
               }
             }
           }
+        },
+        {
+          "title": "instructions",
+          "type": "string",
+          "default": ""
         },
         {
           "title": "title",
@@ -2696,6 +2743,11 @@
           "default": {}
         },
         {
+          "title": "message",
+          "type": "string",
+          "default": ""
+        },
+        {
           "title": "ok",
           "type": "boolean",
           "default": false
@@ -2706,7 +2758,7 @@
           "riskClass": "read_only",
           "requiresApproval": false,
           "packageName": "@cinatra-ai/wordpress-agent",
-          "description": "The agent ends a request that changes nothing: it checks again that no value to save changes the post as read, and answers the post with no changes. Nothing is filed, reviewed or written."
+          "description": "The agent ends a request that changes nothing: it checks again that no value to save changes the post as read, and answers the post with no changes and a fixed message that repeats the request and says that nothing was reviewed or written."
         }
       }
     },
@@ -2743,9 +2795,14 @@
         {
           "title": "error",
           "type": "object"
+        },
+        {
+          "title": "message",
+          "type": "string",
+          "default": ""
         }
       ],
-      "message": "{# Property-scanner workaround: the mount-time input scanner only recognizes a plain, unfiltered, unconditional double-curly-brace reference to a variable — it misses references that pipe through a filter (tojson below) or that only live inside a conditional block. Every input this node declares must therefore also appear once below in that plain form, or mounting fails with an OutputMessageNode validation error even though the body already uses the value. {{ changes }} {{ error }} {{ postId }} {{ instanceId }} {{ proposalId }} {{ changeSetId }} #}{\"postId\":{{ postId | tojson }},\"instanceId\":{{ instanceId | tojson }}{% if proposalId %},\"proposalId\":{{ proposalId | tojson }}{% endif %}{% if changeSetId %},\"changeSetId\":{{ changeSetId | tojson }}{% endif %},\"changes\":{{ changes | tojson }}{% if error %},\"error\":{{ error | tojson }}{% endif %}}"
+      "message": "{# Property-scanner workaround: the mount-time input scanner only recognizes a plain, unfiltered, unconditional double-curly-brace reference to a variable — it misses references that pipe through a filter (tojson below) or that only live inside a conditional block. Every input this node declares must therefore also appear once below in that plain form, or mounting fails with an OutputMessageNode validation error even though the body already uses the value. {{ changes }} {{ error }} {{ postId }} {{ instanceId }} {{ proposalId }} {{ changeSetId }} {{ message }} #}{\"postId\":{{ postId | tojson }},\"instanceId\":{{ instanceId | tojson }}{% if proposalId %},\"proposalId\":{{ proposalId | tojson }}{% endif %}{% if changeSetId %},\"changeSetId\":{{ changeSetId | tojson }}{% endif %},\"changes\":{{ changes | tojson }}{% if error %},\"error\":{{ error | tojson }}{% endif %}{% if message %},\"message\":{{ message | tojson }}{% endif %}}"
     },
     "end": {
       "component_type": "EndNode",
@@ -2780,6 +2837,11 @@
         {
           "title": "error",
           "type": "object"
+        },
+        {
+          "title": "message",
+          "type": "string",
+          "default": ""
         }
       ]
     }

@@ -389,6 +389,7 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   assert.deepEqual(sourcesOf(NO_CHANGE, "pageForm"), [["compose_change", "pageForm"]]);
   for (const field of ["title", "content", "excerpt", "status", "modified", "address", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["read_page", field]]);
   assert.deepEqual(sourcesOf(NO_CHANGE, "postId"), [["start", "postId"]]);
+  assert.deepEqual(sourcesOf(NO_CHANGE, "instructions"), [["start", "instructions"]]);
   for (const input of ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"]) {
     assert.deepEqual(sourcesOf("emit_output", input), [["edit", input], [NO_CHANGE, input]], `the output's ${input} comes from the one step that ran`);
     assert.deepEqual(sourcesOf("end", input), [["edit", input], [NO_CHANGE, input]], `the end's ${input} comes from the one step that ran`);
@@ -405,10 +406,28 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   const ok = JSON.stringify({ code: "", message: "" });
   const unchanged = (writeFields, over = {}) =>
     extensionTool({
-      input: { op: "unchanged", instanceId: JSON.stringify("site-1"), pageForm: JSON.stringify({ writeFields }), ...readInputs(), status: JSON.stringify("publish"), error: ok, ...over },
+      input: {
+        op: "unchanged",
+        instanceId: JSON.stringify("site-1"),
+        pageForm: JSON.stringify({ writeFields }),
+        instructions: JSON.stringify("Say that we are open on weekdays"),
+        ...readInputs(),
+        status: JSON.stringify("publish"),
+        error: ok,
+        ...over,
+      },
       ports: {},
     });
-  const outcome = { ok: true, postId: "42", instanceId: "site-1", proposalId: "", changeSetId: "", changes: [], error: {} };
+  const outcome = {
+    ok: true,
+    postId: "42",
+    instanceId: "site-1",
+    proposalId: "",
+    changeSetId: "",
+    changes: [],
+    error: {},
+    message: `No change was proposed for this request on post 42 (${JSON.stringify(READ.title)}), so nothing was reviewed or written: Say that we are open on weekdays`,
+  };
   assert.deepEqual(await unchanged(nothing), outcome);
   assert.deepEqual(await unchanged({ title: READ.title, content: null, excerpt: null }), outcome);
   await assert.rejects(unchanged(FILED_FIELDS), refusedWith(FORM_CODE), "a change needs the review");

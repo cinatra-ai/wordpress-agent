@@ -652,7 +652,7 @@ test("S8: the page snapshot is filed during the run, and the end node binds no a
     );
   assert.deepEqual(filings, ["file_page"], "one mid-run filing of the page snapshot");
   const endOutputs = parts.end.outputs;
-  assert.deepEqual(titles(endOutputs), RUN_OUTPUTS, "the end node keeps the six run outputs");
+  assert.deepEqual(titles(endOutputs), [...RUN_OUTPUTS, "message"], "the end node keeps the six run outputs, and the message of a change of nothing");
   assert.deepEqual(
     endOutputs.filter((o) => o.cinatra?.artifact).map((o) => o.title),
     [],
