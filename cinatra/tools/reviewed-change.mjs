@@ -14,7 +14,9 @@
  *   are compared, and every block that differs is shown as its source text,
  *   markup and link targets included. The blocks it does not show are byte for
  *   byte the post as read. So no value can be saved that the review did not
- *   show. The excerpts the compose step answers, if any, are never filed. It
+ *   show. A change that adds, removes or moves a character that draws nothing
+ *   or changes the direction of the text is refused (see the invisible
+ *   characters below). The excerpts the compose step answers, if any, are never filed. It
  *   also answers `next`: `no_change` when no value changes the post, so the
  *   flow ends the run completed past the filing and the review; `review`
  *   otherwise.
@@ -65,7 +67,11 @@ const MAX_EXCERPTS = 200;
  */
 const MAX_TEXT = 2_000_000;
 
-/** The most top-level blocks a content value may have: it bounds the memory of the block lists. */
+/**
+ * The most top-level blocks a content value may have: it bounds the memory of
+ * the block lists. The splitting counts each block as it makes it and refuses
+ * at the first block past this limit.
+ */
 const MAX_BLOCKS = 20_000;
 
 /**
@@ -192,10 +198,17 @@ function startsBlock(text, at) {
 /**
  * The top-level blocks of a value, in order: an element with its content, a
  * comment, or a run of text between them. White space between blocks belongs
- * to the block before it. The blocks joined are the value, byte for byte.
+ * to the block before it (white space before the first block belongs to the
+ * first block). The blocks joined are the value, byte for byte.
+ *
+ * `refuse`, when given, bounds the work: each block is counted as it is made,
+ * and the splitting refuses at the first block past MAX_BLOCKS, so it never
+ * makes more than one block past the limit. `meter.blocks`, when given, counts
+ * the blocks made.
  */
-export function blocksOf(text) {
+export function blocksOf(text, refuse, meter) {
   const blocks = [];
+  let lead = "";
   let i = 0;
   while (i < text.length) {
     let end;
@@ -223,11 +236,20 @@ export function blocksOf(text) {
       }
     }
     const piece = text.slice(i, end);
-    if (piece.trim() === "" && blocks.length > 0) blocks[blocks.length - 1] += piece;
-    else blocks.push(piece);
     i = end;
+    if (piece.trim() === "") {
+      if (blocks.length > 0) blocks[blocks.length - 1] += piece;
+      else lead += piece;
+      continue;
+    }
+    if (meter !== undefined) meter.blocks += 1;
+    if (refuse !== undefined && blocks.length >= MAX_BLOCKS) {
+      refuse(`the content has more than ${MAX_BLOCKS} blocks, more than the page snapshot form can compare`);
+    }
+    blocks.push(lead + piece);
+    lead = "";
   }
-  if (blocks.length > 1 && blocks[0].trim() === "") blocks.splice(0, 2, blocks[0] + blocks[1]);
+  if (lead !== "") blocks.push(lead);
   return blocks;
 }
 
@@ -305,6 +327,193 @@ export function compareBlocks(before, after, refuse, meter) {
   return out;
 }
 
+// --- invisible characters --------------------------------------------------
+//
+// The display draws the excerpts as plain text: a changed block as its source,
+// so markup is shown. A character that draws nothing, or that changes the
+// direction of the text around it, is not: the person who reviews the change
+// cannot see it. Such a character is called invisible here:
+// - a format character (Unicode category Cf): the zero-width space, non-joiner
+//   and joiner, the word joiner, U+FEFF, the soft hyphen, the direction marks
+//   and the direction embeddings, overrides and isolates, and the tag
+//   characters;
+// - a control character (Cc) other than tab, line feed and carriage return;
+// - a space (Zs) other than U+0020 and U+00A0, and the line and paragraph
+//   separators (Zl, Zp): a thin, hair or narrow space can join or split words
+//   unseen, and the display draws a separator as a space;
+// - any other character Unicode marks as default ignorable, which draws
+//   nothing in normal text (for example U+034F or the Hangul fillers), except
+//   the variation selectors U+FE00 to U+FE0F, which only choose the look of
+//   the visible character before them (an emoji or a text form).
+//
+// U+00A0, the no-break space, is taken as a space and kept as it is: the
+// display draws it as a space of full width, which is what it is; it changes
+// no word and no direction; pages often hold it; and a block whose only change
+// is a space to U+00A0 is refused already, as a change of white space alone.
+//
+// THE RULE: a change may not add, remove or move an invisible character. It
+// is computed on the difference between the read value and the value to
+// write, so a page that already holds such characters can still be edited.
+// The visible text of the two values (each value without its invisible
+// characters) is matched from the start and from the end. In the unchanged
+// visible text at the start and at the end, every run of invisible characters
+// must stand where it stood. In the changed part between them, each run of
+// invisible characters must stand between the same two visible characters on
+// both sides, as often: a run is kept where an edit leaves its visible
+// neighbours alone, and is added, removed or moved otherwise. So removing a
+// joiner from an emoji sequence, or replacing the sequence, is refused: it
+// removes a joiner, and changes what is drawn in a way the plain text does not
+// show. A change that breaks the rule is refused before anything is filed,
+// with the first such character named by its code point.
+
+const INVISIBLE_CLASS = String.raw`(?![\t\n\r \u00A0\uFE00-\uFE0F])[\p{Cf}\p{Cc}\p{Zs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]`;
+const INVISIBLE_ONE = new RegExp(`^${INVISIBLE_CLASS}$`, "u");
+const INVISIBLE_RUN = new RegExp(`(?:${INVISIBLE_CLASS})+`, "uy");
+const INVISIBLE_ANY = new RegExp(INVISIBLE_CLASS, "u");
+
+/**
+ * The most invisible characters the changed part of one value may hold, on
+ * both sides together: it bounds the memory of the check. A page holds a few.
+ */
+const MAX_INVISIBLE = 10_000;
+
+const isHigh = (unit) => unit >= 0xd800 && unit <= 0xdbff;
+const isLow = (unit) => unit >= 0xdc00 && unit <= 0xdfff;
+const codePointName = (text) => `U+${text.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+
+/** The width, in code units, of the character that starts at `i`. */
+const widthAt = (text, i) => (isHigh(text.charCodeAt(i)) && isLow(text.charCodeAt(i + 1)) ? 2 : 1);
+
+/** The width, in code units, of the character that ends at `k`. */
+const widthBefore = (text, k) => (k >= 2 && isLow(text.charCodeAt(k - 1)) && isHigh(text.charCodeAt(k - 2)) ? 2 : 1);
+
+/** The index after the run of invisible characters that starts at `i` (`i` when there is none). */
+function runEnd(text, i) {
+  INVISIBLE_RUN.lastIndex = i;
+  const match = INVISIBLE_RUN.exec(text);
+  return match === null ? i : i + match[0].length;
+}
+
+/** The index where the run of invisible characters that ends at `k` starts (`k` when there is none). */
+function runStart(text, k) {
+  let at = k;
+  while (at > 0) {
+    const width = widthBefore(text, at);
+    if (!INVISIBLE_ONE.test(text.slice(at - width, at))) break;
+    at -= width;
+  }
+  return at;
+}
+
+function refuseInvisible(verb, ch, region, refuse) {
+  refuse(`the change ${verb} an invisible character ${codePointName(ch)} in the ${region}, which the page snapshot cannot show`);
+}
+
+/** Refuses when two runs of invisible characters at one unchanged place differ: names the first character that differs. */
+function sameRun(region, was, will, refuse) {
+  if (was === will) return;
+  let i = 0;
+  while (i < was.length && i < will.length && was.codePointAt(i) === will.codePointAt(i)) i += widthAt(was, i);
+  if (i < will.length) refuseInvisible("adds", will.slice(i), region, refuse);
+  refuseInvisible("removes", was.slice(i), region, refuse);
+}
+
+/**
+ * The runs of invisible characters of `text` from `from` to `to`, each counted
+ * by `sign` in `counts` under a key made of the visible character before it,
+ * the run and the visible character after it.
+ */
+function countRuns(text, from, to, sign, counts, state) {
+  let i = from;
+  while (i < to) {
+    const end = runEnd(text, i);
+    if (end === i) {
+      i += widthAt(text, i);
+      continue;
+    }
+    state.characters += end - i;
+    if (state.characters > MAX_INVISIBLE) {
+      state.refuse(`the changed part of the ${state.region} holds more than ${MAX_INVISIBLE} invisible characters, more than the page snapshot form can check`);
+    }
+    const before = i === 0 ? "" : text.slice(i - widthBefore(text, i), i);
+    const after = end >= text.length ? "" : text.slice(end, end + widthAt(text, end));
+    const key = `${before}\u0000${text.slice(i, end)}\u0000${after}`;
+    counts.set(key, (counts.get(key) ?? 0) + sign);
+    i = end;
+  }
+}
+
+/** Refuses unless the value to write keeps every invisible character of the read value, by THE RULE above, and adds none. */
+export function checkedInvisibles(region, was, will, refuse) {
+  if (!INVISIBLE_ANY.test(was) && !INVISIBLE_ANY.test(will)) return;
+  // The unchanged start: the common text, cut back to the start of the run of
+  // invisible characters it ends in, then matched visible character by
+  // visible character.
+  let start = 0;
+  const shorter = Math.min(was.length, will.length);
+  while (start < shorter && was.charCodeAt(start) === will.charCodeAt(start)) start += 1;
+  if (start > 0 && isHigh(was.charCodeAt(start - 1))) start -= 1;
+  start = runStart(was, start);
+  let fromWas = start;
+  let fromWill = start;
+  let endWas;
+  let endWill;
+  for (;;) {
+    endWas = runEnd(was, fromWas);
+    endWill = runEnd(will, fromWill);
+    const doneWas = endWas >= was.length;
+    const doneWill = endWill >= will.length;
+    const nextWas = doneWas ? "" : was.slice(endWas, endWas + widthAt(was, endWas));
+    const nextWill = doneWill ? "" : will.slice(endWill, endWill + widthAt(will, endWill));
+    if (nextWas !== nextWill) break;
+    sameRun(region, was.slice(fromWas, endWas), will.slice(fromWill, endWill), refuse);
+    if (doneWas) return;
+    fromWas = endWas + nextWas.length;
+    fromWill = endWill + nextWill.length;
+  }
+  // The unchanged end, matched the same way from the end, never into the
+  // unchanged start.
+  let tail = 0;
+  const longest = Math.min(was.length - endWas, will.length - endWill);
+  while (tail < longest && was.charCodeAt(was.length - 1 - tail) === will.charCodeAt(will.length - 1 - tail)) tail += 1;
+  let toWas = was.length - tail;
+  let toWill = will.length - tail;
+  if (tail > 0 && toWas < was.length && isLow(was.charCodeAt(toWas))) {
+    toWas += 1;
+    toWill += 1;
+  }
+  const skip = runEnd(was, toWas) - toWas;
+  toWas += skip;
+  toWill += skip;
+  for (;;) {
+    const backWas = runStart(was, toWas);
+    const backWill = runStart(will, toWill);
+    const prevWas = backWas > endWas ? was.slice(backWas - widthBefore(was, backWas), backWas) : "";
+    const prevWill = backWill > endWill ? will.slice(backWill - widthBefore(will, backWill), backWill) : "";
+    if (prevWas === "" || prevWas !== prevWill) break;
+    sameRun(region, was.slice(backWas, toWas), will.slice(backWill, toWill), refuse);
+    toWas = backWas - prevWas.length;
+    toWill = backWill - prevWill.length;
+  }
+  // The changed part: each run kept between the same two visible characters.
+  const counts = new Map();
+  const state = { region, refuse, characters: 0 };
+  countRuns(was, fromWas, toWas, 1, counts, state);
+  countRuns(will, fromWill, toWill, -1, counts, state);
+  let removed;
+  let added;
+  for (const [key, count] of counts) {
+    const run = key.split("\u0000")[1];
+    if (count > 0 && removed === undefined) removed = run;
+    if (count < 0 && added === undefined) added = run;
+  }
+  if (removed !== undefined && added !== undefined && removed.codePointAt(0) === added.codePointAt(0)) {
+    refuseInvisible("moves", removed, region, refuse);
+  }
+  if (added !== undefined) refuseInvisible("adds", added, region, refuse);
+  if (removed !== undefined) refuseInvisible("removes", removed, region, refuse);
+}
+
 function excerpt(region, position, published, proposed, refuse) {
   if (sameWords(published, proposed)) {
     refuse(`the change of the ${region} differs from the post only in white space, which the page snapshot cannot show`);
@@ -314,13 +523,10 @@ function excerpt(region, position, published, proposed, refuse) {
 }
 
 /** The content's changed blocks, each with its source text on both sides. */
-function contentExcerpts(before, after, refuse) {
+function contentExcerpts(before, after, refuse, meter) {
   const out = [];
-  const was = blocksOf(before);
-  const will = blocksOf(after);
-  if (was.length > MAX_BLOCKS || will.length > MAX_BLOCKS) {
-    refuse(`the content has more than ${MAX_BLOCKS} blocks, more than the page snapshot form can compare`);
-  }
+  const was = blocksOf(before, refuse, meter);
+  const will = blocksOf(after, refuse, meter);
   const entries = compareBlocks(was, will, refuse);
   let position = 0;
   let k = 0;
@@ -347,21 +553,28 @@ function contentExcerpts(before, after, refuse) {
 /**
  * The excerpts the review shows for the values to save, derived from them and
  * the post as read: the title, the content's changed blocks, the excerpt. A
- * value that equals the post as read shows no excerpt.
+ * value that equals the post as read shows no excerpt. The length of each
+ * value is checked first, then the invisible characters of each value that
+ * changes (`checkedInvisibles`), then the content is split into blocks, each
+ * counted against MAX_BLOCKS as it is made. `meter.blocks`, when given, counts
+ * the blocks made.
  */
-export function excerptsOf(read, writeFields, refuse) {
+export function excerptsOf(read, writeFields, refuse, meter) {
   for (const field of FIELDS) {
     if (read[field].length > MAX_TEXT) refuse(`the ${field} as read is longer than ${MAX_TEXT} characters`);
     if (writeFields[field] !== null && writeFields[field].length > MAX_TEXT) {
       refuse(`the value to save for the ${field} is longer than ${MAX_TEXT} characters`);
     }
   }
+  for (const field of FIELDS) {
+    if (writeFields[field] !== null && writeFields[field] !== read[field]) checkedInvisibles(field, read[field], writeFields[field], refuse);
+  }
   const out = [];
   if (writeFields.title !== null && writeFields.title !== read.title) {
     out.push(excerpt("title", 0, read.title, writeFields.title, refuse));
   }
   if (writeFields.content !== null && writeFields.content !== read.content) {
-    out.push(...contentExcerpts(read.content, writeFields.content, refuse));
+    out.push(...contentExcerpts(read.content, writeFields.content, refuse, meter));
   }
   if (writeFields.excerpt !== null && writeFields.excerpt !== read.excerpt) {
     out.push(excerpt("excerpt", 0, read.excerpt, writeFields.excerpt, refuse));
