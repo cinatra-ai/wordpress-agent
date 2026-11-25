@@ -1058,3 +1058,88 @@ test("F32 every answer code of the write has its own branch and outcome; none re
     }
   }
 });
+
+// --- one post id through the whole run ----------------------------------------------
+
+/**
+ * Runs one pack-tool step as the flow does: each input takes the value of its
+ * data edge's source in `env` (or its declared default when that step has not
+ * run), each argument is the step's own template rendered with `tojson`, and
+ * the tool's answer is stored in `env` under `<step>.<output>`.
+ */
+async function runToolStep(node, env, ports = {}) {
+  const vars = {};
+  for (const input of parts[node].inputs) {
+    const [source] = sourcesOf(node, input.title).map(([from, output]) => `${from}.${output}`).filter((key) => key in env);
+    vars[input.title] = source === undefined ? input.default : env[source];
+  }
+  const call = {};
+  for (const [key, template] of Object.entries(parts[node].data.input.input)) call[key] = key === "op" ? template : render(template, vars);
+  const out = await tool.extensionTool({ input: call, ports });
+  for (const [key, value] of Object.entries(out)) env[`${node}.${key}`] = value;
+  return out;
+}
+/** A site step's answer as the runtime extracts it: each declared output from the answer's own field, else null. */
+function siteStep(node, env, answer) {
+  for (const output of parts[node].outputs) env[`${node}.${output.title}`] = Object.prototype.hasOwnProperty.call(answer, output.title) ? answer[output.title] : null;
+}
+const NEW_CONTENT = "<p>We are open Monday to Saturday.</p>";
+/** The run up to the check of the read, for the run's post id `postId` as the caller sends it. */
+async function runToRead(postId) {
+  const env = {
+    "start.postId": postId,
+    "start.instanceId": "wp-prod",
+    "start.postType": "post",
+    "start.instructions": "Open on Saturday too.",
+    "start.cinatra_run_id": "run-1",
+  };
+  await runToolStep(INPUT_STEP, env);
+  siteStep(READ_STEP, env, readAnswer());
+  await runToolStep(CHECK_STEP, env);
+  return env;
+}
+
+test("F33 every step after the check of the read takes the run's post id from it, never from the start", () => {
+  for (const edge of oas.data_flow_connections) {
+    if (edge.source_node.$component_ref !== "start" || edge.source_output !== "postId") continue;
+    assert.equal(edge.destination_node.$component_ref, INPUT_STEP, `${edge.name}: only the check of the inputs reads the start's post id`);
+  }
+  for (const node of ["form_page", REVIEWED_READ, "no_change_outcome", OUTCOME_STEP]) {
+    assert.deepEqual(sourcesOf(node, "postId"), [[CHECK_STEP, "postId"]], `${node} takes the checked post id`);
+  }
+});
+
+test("F34 a numeric id and a numeric string run to the end of every branch with the post id \"42\"; a padded string ends before the read", async () => {
+  for (const postId of [42, "42"]) {
+    const label = JSON.stringify(postId);
+    // No change.
+    const quiet = await runToRead(postId);
+    quiet["compose_change.pageForm"] = { cinatraCmsPage: 1, system: "wordpress", writeFields: { title: null, content: null, excerpt: null } };
+    assert.equal((await runToolStep("form_page", quiet)).next, "no_change", label);
+    const unchanged = await runToolStep("no_change_outcome", quiet);
+    assert.equal(unchanged.postId, "42", `${label}: no change ends with the post id`);
+    // Review, write and each outcome.
+    const answers = {
+      written: saved({ post_content: NEW_CONTENT }),
+      post_changed: { success: false, code: "post_changed", message: "m", data: { changed: ["post_content"] } },
+      ...Object.fromEntries(REFUSAL_CODES.map((code) => [code, { success: false, code, message: "m", data: {} }])),
+      write_outcome_unknown: { success: false, code: "write_outcome_unknown", message: "m", data: { cause: "differs", site_changes_possible: true } },
+    };
+    for (const [next, answer] of Object.entries(answers)) {
+      const env = await runToRead(postId);
+      env["compose_change.pageForm"] = { cinatraCmsPage: 1, system: "wordpress", writeFields: { title: null, content: NEW_CONTENT, excerpt: null } };
+      const formed = await runToolStep("form_page", env);
+      assert.equal(formed.next, "review", label);
+      env["file_page.artifactId"] = "artifact-7";
+      env["page_review_gate.pageReviewNote"] = JSON.stringify({ approved: true, review: { envelopeVersion: 1, decision: "approved", targets: [{ artifactId: "artifact-7", representationRevisionId: "revision-1" }] } });
+      const ports = { artifacts: { async contentRead(request) { return { ...request, text: JSON.stringify(formed.pageForm), truncated: false }; } } };
+      const reviewed = await runToolStep(REVIEWED_READ, env, ports);
+      assert.equal(reviewed.reviewedContent, NEW_CONTENT, label);
+      siteStep(WRITE_STEP, env, answer);
+      const out = await runToolStep(OUTCOME_STEP, env);
+      assert.equal(out.next, next, `${label}: ${next}`);
+      assert.equal(out.postId, "42", `${label}: ${next} ends with the post id`);
+    }
+  }
+  await assert.rejects(runToRead(" 42"), refusedWith("run_input_invalid"), "a padded id ends before the read");
+});

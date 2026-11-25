@@ -769,9 +769,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_form_page_postId",
+      "name": "check_read_to_form_page_postId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_read"
       },
       "source_output": "postId",
       "destination_node": {
@@ -889,9 +889,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_read_reviewed_page_postId",
+      "name": "check_read_to_read_reviewed_page_postId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_read"
       },
       "source_output": "postId",
       "destination_node": {
@@ -913,9 +913,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_no_change_outcome_postId",
+      "name": "check_read_to_no_change_outcome_postId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_read"
       },
       "source_output": "postId",
       "destination_node": {

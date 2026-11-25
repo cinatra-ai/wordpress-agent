@@ -400,7 +400,7 @@ test("T15 a change of nothing ends the run completed, past the filing and the re
   for (const word of ["wordpress_site_tool", "ewpa/"]) assert.equal(JSON.stringify(node).includes(word), false, `the no-change step names no ${word}`);
   assert.deepEqual(sourcesOf(NO_CHANGE, "pageForm"), [["compose_change", "pageForm"]]);
   for (const field of ["title", "content", "excerpt", "status", "modified", "address", "error"]) assert.deepEqual(sourcesOf(NO_CHANGE, field), [["check_read", field]]);
-  assert.deepEqual(sourcesOf(NO_CHANGE, "postId"), [["start", "postId"]]);
+  assert.deepEqual(sourcesOf(NO_CHANGE, "postId"), [["check_read", "postId"]], "the checked post id");
   assert.deepEqual(sourcesOf(NO_CHANGE, "instructions"), [["start", "instructions"]]);
   for (const input of ["postId", "instanceId", "proposalId", "changeSetId", "changes", "error"]) {
     assert.deepEqual(sourcesOf("emit_output", input).sort(), [[NO_CHANGE, input], ["write_outcome", input]], `the output's ${input} comes from the one step that ran`);

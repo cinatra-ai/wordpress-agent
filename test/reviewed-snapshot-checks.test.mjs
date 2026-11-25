@@ -60,7 +60,7 @@ const PAGE = {
   cmsAddress: null,
 };
 
-/** The read inputs as the flow renders them: each value as JSON text. The run's post id comes from the start, the read's from the read step. */
+/** The read inputs as the flow renders them: each value as JSON text. The run's post id is the checked id of `check_read`; the read's is the same output. */
 const readInputs = (read = READ) => ({
   postId: JSON.stringify(read.postId),
   readPostId: JSON.stringify(read.readPostId ?? read.postId),
@@ -314,13 +314,13 @@ test("R2 a read input missing from the call, or standing at the flow's default, 
   }
 });
 
-test("R3 the steps take the read's values from the check of the read, and the run's post id from the start", () => {
+test("R3 the steps take the read's values from the check of the read, and the run's checked post id from it too", () => {
   for (const step of ["form_page", "no_change_outcome", "read_reviewed_page"]) {
     for (const name of ["title", "content", "excerpt", "status", "modified", "address", "error"]) {
       assert.deepEqual(sourcesOf(step, name), [["check_read", name]], `${step}.${name}`);
     }
     assert.deepEqual(sourcesOf(step, "readPostId"), [["check_read", "postId"]], `${step}.readPostId`);
-    assert.deepEqual(sourcesOf(step, "postId"), [["start", "postId"]], `${step}.postId`);
+    assert.deepEqual(sourcesOf(step, "postId"), [["check_read", "postId"]], `${step}.postId: the checked post id`);
   }
   for (const id of ["form_page", "file_page"]) {
     const form = id === "form_page" ? find(parts[id].outputs, "pageForm") : find(parts[id].inputs, "pageForm");

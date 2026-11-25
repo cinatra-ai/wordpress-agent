@@ -111,7 +111,7 @@ test("N4 the step takes the request from the start and hands its message to the 
   assert.deepEqual(sourcesOf(STEP, "instructions"), [["start", "instructions"]]);
   assert.match(node.data.input.input.instructions, /\{\{ instructions \| tojson \}\}/);
   assert.deepEqual(sourcesOf(STEP, "title"), [["check_read", "title"]]);
-  assert.deepEqual(sourcesOf(STEP, "postId"), [["start", "postId"]]);
+  assert.deepEqual(sourcesOf(STEP, "postId"), [["check_read", "postId"]], "the checked post id");
   assert.ok(node.outputs.some((o) => o.title === "message" && o.type === "string"), "the step answers a message");
   assert.deepEqual(sourcesOf("emit_output", "message").sort(), [[STEP, "message"], ["write_outcome", "message"]]);
   assert.deepEqual(sourcesOf("end", "message").sort(), [[STEP, "message"], ["write_outcome", "message"]]);
