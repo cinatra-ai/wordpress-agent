@@ -148,7 +148,7 @@ const refusedWith = (code) => (err) =>
 test("T1 the flow derives the filed form by the tool, and reads the approved revision back by the tool", () => {
   const road = oas.nodes.map((n) => n.$component_ref);
   assert.deepEqual(road, [
-    "start", "read_page", "check_read", "compose_change", "form_page", "route_change", "file_page", "gather_page_review",
+    "start", "check_input", "read_page", "check_read", "compose_change", "form_page", "route_change", "file_page", "gather_page_review",
     "page_review_gate", "read_reviewed_page", "write_page", "write_outcome", "route_write", "no_change_outcome", "emit_output", "end",
   ]);
   for (const id of ["form_page", "read_reviewed_page"]) {

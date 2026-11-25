@@ -29,6 +29,7 @@ const EXAMPLE_END = "END EXAMPLE FORM";
 
 const ROAD = [
   "start",
+  "check_input",
   "read_page",
   "check_read",
   "compose_change",
@@ -285,7 +286,7 @@ test("S2: the read step reads the page and writes nothing, and its check hands t
   assert.equal(node.metadata.cinatra.riskClass, "read_only");
   for (const word of ["ewpa/update-post", "ewpa/create-post", "wordpress_site_tool_write", "cinatra/post-update-if-unchanged"])
     assert.equal(JSON.stringify(node.data).includes(word), false, `the read step never names ${word}`);
-  for (const input of ["instanceId", "postId"]) assertEdgeFrom("read_page", input, "start");
+  for (const input of ["instanceId", "postId"]) assertEdgeFrom("read_page", input, "check_input");
   assertEdgeFrom("read_page", "agent_run_id", "start", "cinatra_run_id");
   const check = parts.check_read;
   assert.deepEqual(titles(check.outputs), ["postId", "instanceId", "postType", "title", "content", "excerpt", "status", "address", "modified", "rowToken", "error", "ok"]);

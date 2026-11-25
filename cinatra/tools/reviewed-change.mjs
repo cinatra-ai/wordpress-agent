@@ -61,6 +61,8 @@
 export const FORM_CODE = "page_form_unavailable";
 export const READ_CODE = "reviewed_change_unavailable";
 export const PAGE_CODE = "post_read_unavailable";
+/** The refusal of the run's inputs: nothing is read from the site. */
+export const INPUT_CODE = "run_input_invalid";
 export const OUTCOME_CODE = "write_answer_unreadable";
 
 /**
@@ -127,6 +129,7 @@ const REFUSAL_WORDS = {
   [FORM_CODE]: ["nothing was filed", "start a new run"],
   [READ_CODE]: ["nothing was written", "start a new run"],
   [PAGE_CODE]: ["nothing was proposed", "start a new run"],
+  [INPUT_CODE]: ["nothing was read from the site", "start a new run with a valid post and site"],
   [OUTCOME_CODE]: ["the outcome of the save is not known", "check the post on the site before a new run"],
 };
 
@@ -809,6 +812,45 @@ async function read(call, ports) {
   };
 }
 
+// --- input: the check of the run's inputs, before anything is read -----------
+
+/** The form of a canonical post id: digits only, no sign, no point, no leading zero. */
+const POST_ID_FORM = /^[1-9][0-9]*$/;
+/** The form of a site instance id: present, no white space, no control character. */
+const INSTANCE_ID_FORM = /^[^\s\p{Cc}]{1,200}$/u;
+
+/**
+ * The post id as a number, or undefined. A text must be canonical (digits
+ * only, no sign, no decimal point, no leading zero) and a number must be a
+ * whole number; either must be a positive safe integer.
+ */
+function canonicalPostId(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 1 ? value : undefined;
+  if (typeof value !== "string" || !POST_ID_FORM.test(value)) return undefined;
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : undefined;
+}
+
+/**
+ * THE RUN'S INPUTS, checked before the flow makes any site call. The post id
+ * is a canonical positive integer and is answered as a number, which the read
+ * step renders as it is; the site instance id is present and has no white
+ * space; the type hint is empty, post or page. Anything else is refused, and
+ * the run ends before the read.
+ */
+function runInput(call) {
+  const refuse = (cause) => {
+    throw new Refusal(INPUT_CODE, cause);
+  };
+  const postId = canonicalPostId(jsonValue(call.postId));
+  if (postId === undefined) refuse("the run's post id is not a whole number from 1 written in digits only");
+  const instanceId = jsonValue(call.instanceId);
+  if (typeof instanceId !== "string" || !INSTANCE_ID_FORM.test(instanceId)) refuse("the run names no WordPress site");
+  const hint = jsonValue(call.postType);
+  if (typeof hint !== "string" || !TYPE_HINTS.has(hint.trim())) refuse("the run asks for a post type other than post or page");
+  return { ok: true, postId, instanceId, postType: hint.trim() };
+}
+
 // --- page: the check of the site's read --------------------------------------
 
 /** A value the flow renders with `tojson`, read back; the value itself when it is not JSON text. */
@@ -849,10 +891,11 @@ function page(call) {
     const code = jsonValue(call.code);
     refuse(typeof code === "string" && NAME_FORM.test(code) ? `the site refused the read (${code})` : "the site answered no successful read of the post");
   }
-  const postId = (textInput(call.postId) ?? "").trim();
-  if (!/^[1-9][0-9]*$/.test(postId)) refuse("the run names no post id that is a whole number");
+  const validated = canonicalPostId(jsonValue(call.postId));
+  if (validated === undefined) refuse("the run names no post id that is a whole number");
+  const postId = String(validated);
   const answered = jsonValue(call.post_id);
-  if (!Number.isInteger(answered) || String(answered) !== postId) refuse("the site answered another post than the run's post");
+  if (answered !== validated) refuse("the site answered another post than the run's post");
   const hint = (textInput(call.postType) ?? "").trim();
   if (!TYPE_HINTS.has(hint)) refuse("the run asks for a post type other than post or page");
   const values = {};
@@ -972,7 +1015,7 @@ function outcome(call) {
 
 /**
  * THE ONE CALLABLE EXPORT the declared-tools contract pins: one function of one
- * argument, `{ input, ports }`. Its operations are `page`, `form`, `unchanged`,
+ * argument, `{ input, ports }`. Its operations are `input`, `page`, `form`, `unchanged`,
  * `read` and `outcome`; any other is refused.
  */
 export async function extensionTool({ input, ports }) {
@@ -981,7 +1024,8 @@ export async function extensionTool({ input, ports }) {
   if (op === "form") return form(call);
   if (op === "unchanged") return unchanged(call);
   if (op === "read") return read(call, ports);
+  if (op === "input") return runInput(call);
   if (op === "page") return page(call);
   if (op === "outcome") return outcome(call);
-  throw new Error(`reviewed_change: \`op\` must be page, form, unchanged, read or outcome — got ${JSON.stringify(call.op)}`);
+  throw new Error(`reviewed_change: \`op\` must be input, page, form, unchanged, read or outcome — got ${JSON.stringify(call.op)}`);
 }

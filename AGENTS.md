@@ -34,7 +34,7 @@ The caller sends a single `user` message whose text is a JSON-stringified object
 }
 ```
 
-All fields are strings. `postId` must be a whole number; the read step sends it to the site as a number. `postType` is a hint (`post`, `page` or empty); the type comes from the site's read, and pages are edited like posts. Any other `postType` ends the run at the check of the read. `postStatus` is not used: the status comes from the read.
+All fields are strings. `postId` must be a whole number from 1 written in digits only (no sign, decimal point, white space or leading zero, at most 9007199254740991); a number input must be such a whole number. `instanceId` must name the site (no white space). The check of the run's inputs refuses anything else with `run_input_invalid` before any site call; the read step sends the checked id to the site as a number. `postType` is a hint (`post`, `page` or empty); the type comes from the site's read, and pages are edited like posts. Any other `postType` ends the run at the check of the read. `postStatus` is not used: the status comes from the read.
 
 ## A2A output contract
 
@@ -62,14 +62,15 @@ The caller reads this from `task.history` (not `task.artifacts`).
 ## The flow (cinatra-ai/cinatra#3745)
 
 ```
-start → read_page → check_read → compose_change → form_page → route_change
+start → check_input → read_page → check_read → compose_change → form_page → route_change
 route_change:default → file_page → gather_page_review → page_review_gate → read_reviewed_page → write_page → write_outcome → route_write
 route_change:no_change → no_change_outcome → emit_output → end
 route_write:written | <each refusal code> | default → emit_output → end
 route_write:post_changed → read_page
 ```
 
-- `read_page` (no model): one call of `wordpress_site_tool_call` with `toolName: "cinatra/post-read"` and `argsJson: {"post_id": <postId as a number>}`. It outputs the site's answer as is: `success`, `code`, `post_id`, `post_title`, `post_content`, `post_excerpt`, `post_status`, `post_type`, `post_modified_gmt`, `permalink`, `row_token`.
+- `check_input` (pack tool, op `input`, no site call): checks `postId`, `instanceId` and the `postType` hint as described above, and answers the post id as a number. Else `run_input_invalid`, and the run ends before anything is read.
+- `read_page` (no model): one call of `wordpress_site_tool_call` with `toolName: "cinatra/post-read"` and `argsJson: {"post_id": <checked post id>}`, rendered with `tojson` only. Its `instanceId` and `postId` come only from `check_input`. It outputs the site's answer as is: `success`, `code`, `post_id`, `post_title`, `post_content`, `post_excerpt`, `post_status`, `post_type`, `post_modified_gmt`, `permalink`, `row_token`.
 - `check_read` (pack tool, op `page`): goes on only for `success: true`, the run's post id, a post or a page, status `publish` or `draft` (the two the site writes), a change time and a row token of the site's form. Else `post_read_unavailable`.
 - `compose_change` is the only model step. It declares `metadata.cinatra.tools: []` and no toolbox, so the host serves it no tool. It answers `pageForm.writeFields`: the complete new `title`, `content` and `excerpt`, each a text or null.
 - `form_page`, `file_page`, `gather_page_review`, `page_review_gate` and `read_reviewed_page` file the proposal as a page snapshot, have a person review it and read back the approved revision; see "What the review shows". `read_reviewed_page` answers `reviewedTitle`, `reviewedContent`, `reviewedExcerpt` (empty when not saved), `reviewedRevisionId` and `reviewedSnapshot` (that revision as a one-item list).
@@ -88,7 +89,7 @@ route_write:post_changed → read_page
  [, "title": <reviewedTitle>] [, "content": <reviewedContent>] [, "excerpt": <reviewedExcerpt>] [, "status": "draft" when status is publish]}
 ```
 
-Each value is written with `tojson`; no value is put into the JSON text by hand. Each input has exactly one data edge: `postId`, `modified`, `title`, `content`, `excerpt`, `status` and `rowToken` from `read_page` (the site's answer, byte for byte), the reviewed values and the revision from `read_reviewed_page`, `instanceId` from `start`. No value of the model step reaches the write. A field the review does not save is not sent. A published post is moved to draft in the same save, so the live page goes offline until a person publishes it; the previous revision stays in WordPress's revision history.
+Each value is written with `tojson`; no value is put into the JSON text by hand. Each input has exactly one data edge: `postId`, `modified`, `title`, `content`, `excerpt`, `status` and `rowToken` from `read_page` (the site's answer, byte for byte), the reviewed values and the revision from `read_reviewed_page`, `instanceId` from `check_input`. `postId` is the read's own answer: `check_read` refuses a read whose `post_id` is not the checked id, and the write runs only after that check passed on the same read. No value of the model step reaches the write. A field the review does not save is not sent. A published post is moved to draft in the same save, so the live page goes offline until a person publishes it; the previous revision stays in WordPress's revision history.
 
 The site compares, under a row lock, the change time, the four values and the row token with the stored post, and writes only when all are equal (see the plugin's documentation, "Content abilities"). There is no re-read before the write and no window between a check and an unconditional update.
 

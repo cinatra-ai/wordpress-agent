@@ -58,7 +58,7 @@ test("the post type comes from the read, the run's type is a hint, and the statu
   assert.equal(check_read.data.input.input.op, "page", "the check of the read takes the type from the site's answer");
   const hint = flow.data_flow_connections.find((edge) =>
     edge.destination_node.$component_ref === "check_read" && edge.destination_input === "postType");
-  assert.equal(hint.source_node.$component_ref, "start");
+  assert.equal(hint.source_node.$component_ref, "check_input", "the hint reaches the check of the read only after the check of the run's inputs");
   const status = flow.data_flow_connections.find((edge) =>
     edge.destination_node.$component_ref === "write_page" && edge.destination_input === "status");
   assert.equal(status.source_node.$component_ref, "read_page");

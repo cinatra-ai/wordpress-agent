@@ -38,6 +38,7 @@ const parts = oas.$referenced_components;
 const PASSTHROUGH = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
 const BRIDGE = "/api/llm-bridge";
 const READ_STEP = "read_page";
+const INPUT_STEP = "check_input";
 const CHECK_STEP = "check_read";
 const MODEL_STEP = "compose_change";
 const REVIEWED_READ = "read_reviewed_page";
@@ -156,8 +157,9 @@ test("F1 the read step calls cinatra/post-read through the connector's read tool
   assert.equal(read.data.input.toolName, READ_ABILITY);
   assert.equal(read.data.input.instanceId, "{{ instanceId }}");
   assert.equal(Object.prototype.hasOwnProperty.call(read.data.input, "args"), false, "the arguments go as JSON text only");
-  const args = JSON.parse(render(read.data.input.argsJson, { postId: "42" }));
-  assert.deepEqual(args, { post_id: 42 }, "the post id is sent as a number, rendered by tojson");
+  const args = JSON.parse(render(read.data.input.argsJson, { postId: 42 }));
+  assert.deepEqual(args, { post_id: 42 }, "the validated post id is sent as a number, rendered by tojson");
+  assert.equal(/\|\s*int\b/.test(read.data.input.argsJson), false, "no coercing filter in front of the call");
   assert.equal(cinatraOf(read).riskClass, "read_only");
   assert.equal(Object.prototype.hasOwnProperty.call(read.data, "system"), false, "no model instructions");
   for (const name of ["success", "code", "post_id", "post_title", "post_content", "post_excerpt", "post_status", "post_type", "post_modified_gmt", "permalink", "row_token"]) {
@@ -166,7 +168,8 @@ test("F1 the read step calls cinatra/post-read through the connector's read tool
 });
 
 test("F2 the read and its check precede the model step, which the run reaches only through them", () => {
-  assert.deepEqual(controlFrom("start").map((e) => e.to_node.$component_ref), [READ_STEP]);
+  assert.deepEqual(controlFrom("start").map((e) => e.to_node.$component_ref), [INPUT_STEP]);
+  assert.deepEqual(controlFrom(INPUT_STEP).map((e) => e.to_node.$component_ref), [READ_STEP]);
   assert.deepEqual(controlInto(CHECK_STEP), [READ_STEP]);
   assert.deepEqual(controlInto(MODEL_STEP), [CHECK_STEP]);
   assert.equal(reachable("start", READ_STEP).has(MODEL_STEP), false, "no road to the model step bypasses the read");
@@ -295,7 +298,7 @@ test("F7 every argument is a template over a declared input, and each input is f
   for (const input of REVIEWED_INPUTS) {
     assert.deepEqual(sourcesOf(WRITE_STEP, input), [[REVIEWED_READ, input]], `${input} comes from the read-back of the reviewed revision`);
   }
-  assert.deepEqual(sourcesOf(WRITE_STEP, "instanceId"), [["start", "instanceId"]]);
+  assert.deepEqual(sourcesOf(WRITE_STEP, "instanceId"), [[INPUT_STEP, "instanceId"]], "the site comes from the validated input");
   assert.equal(
     oas.data_flow_connections.some((e) => e.destination_node.$component_ref === WRITE_STEP && e.source_node.$component_ref === MODEL_STEP),
     false,
@@ -481,4 +484,78 @@ test("F18 the package consumes the two site tools and declares the pack tool", (
   const consumed = pkg.cinatra.consumes.filter((c) => c.requirement === "required").map((c) => c.primitive).sort();
   assert.deepEqual(consumed, [READ_TOOL, WRITE_TOOL]);
   assert.ok(pkg.cinatra.tools.some((t) => t.name === "reviewed_change"));
+});
+
+// --- nothing is read before the run's inputs are valid ------------------------------
+
+const inputCall = (postId, instanceId = "wp-prod") => ({
+  op: "input",
+  postId: JSON.stringify(postId),
+  instanceId: JSON.stringify(instanceId),
+  postType: JSON.stringify(""),
+});
+
+/**
+ * The read step's argsJson for a run input, through the flow's own edges: the
+ * input step's tool answers (or refuses), and the read step renders the output
+ * that its one `postId` edge names. `null` when the input step refuses, so the
+ * read step never runs and no site call is made.
+ */
+async function readArgsFor(postId, instanceId) {
+  const { extensionTool } = await load();
+  const [[source, output]] = sourcesOf(READ_STEP, "postId");
+  assert.equal(source, INPUT_STEP);
+  let validated;
+  try {
+    validated = await extensionTool({ input: inputCall(postId, instanceId), ports: {} });
+  } catch (err) {
+    assert.ok(refusedWith("run_input_invalid")(err), String(err && err.message));
+    return null;
+  }
+  return JSON.parse(render(parts[READ_STEP].data.input.argsJson, { postId: validated[output], instanceId: validated.instanceId, agent_run_id: "" }));
+}
+
+test("F19 a step before the read validates the run's inputs, and the read takes the post id and the site only from it", () => {
+  const step = parts[INPUT_STEP];
+  assert.equal(step.url, PASSTHROUGH);
+  assert.equal(step.data.tool, "extension_tool");
+  assert.equal(step.data.input.name, "reviewed_change");
+  assert.equal(step.data.input.input.op, "input");
+  assert.deepEqual(controlInto(INPUT_STEP), ["start"]);
+  assert.deepEqual(controlInto(READ_STEP).sort(), [INPUT_STEP, ROUTE_STEP], "the read follows the input check, or the way back after post_changed");
+  assert.deepEqual(sourcesOf(READ_STEP, "postId"), [[INPUT_STEP, "postId"]]);
+  assert.deepEqual(sourcesOf(READ_STEP, "instanceId"), [[INPUT_STEP, "instanceId"]]);
+  assert.equal(parts[INPUT_STEP].outputs.find((o) => o.title === "postId").type, "integer");
+  for (const node of [READ_STEP, WRITE_STEP]) {
+    for (const edge of oas.data_flow_connections.filter((e) => e.destination_node.$component_ref === node)) {
+      assert.notDeepEqual([edge.source_node.$component_ref, edge.source_output].join("."), "start.postId", `${node} takes no raw post id`);
+      assert.notDeepEqual([edge.source_node.$component_ref, edge.source_output].join("."), "start.instanceId", `${node} takes no raw site id`);
+    }
+  }
+});
+
+test("F20 a malformed post id reaches no site call; a canonical one is sent as that number", async () => {
+  for (const bad of ["4.2", "04", "4e0", " 4", "4 ", "+4", "-4", -4, 0, "0", "", 4.5, "9007199254740993", 1e20, "١٢", null]) {
+    assert.equal(await readArgsFor(bad), null, `${JSON.stringify(bad)} is refused before the read`);
+  }
+  assert.deepEqual(await readArgsFor("42"), { post_id: 42 });
+  assert.deepEqual(await readArgsFor(42), { post_id: 42 }, "a number input that is a whole number is taken");
+  assert.deepEqual(await readArgsFor("9007199254740991"), { post_id: 9007199254740991 });
+});
+
+test("F21 a missing or padded site id reaches no site call", async () => {
+  for (const bad of ["", "   ", " wp-prod", "wp\nprod", null]) {
+    assert.equal(await readArgsFor("42", bad), null, `${JSON.stringify(bad)} is refused before the read`);
+  }
+});
+
+test("F22 the write's post id is the read's answer, which the check of the read proved equal to the validated id", async () => {
+  assert.deepEqual(sourcesOf(WRITE_STEP, "postId"), [[READ_STEP, "post_id"]]);
+  assert.deepEqual(sourcesOf(CHECK_STEP, "postId"), [[INPUT_STEP, "postId"]]);
+  assert.deepEqual(sourcesOf(CHECK_STEP, "post_id"), [[READ_STEP, "post_id"]]);
+  const { extensionTool } = await load();
+  const call = { ...pageCall(readAnswer({ post_id: 43 })), postId: JSON.stringify(42) };
+  await assert.rejects(extensionTool({ input: call, ports: {} }), refusedWith("post_read_unavailable"));
+  const ok = await extensionTool({ input: { ...pageCall(readAnswer()), postId: JSON.stringify(42) }, ports: {} });
+  assert.equal(ok.postId, "42");
 });

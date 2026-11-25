@@ -71,7 +71,7 @@ test("R2: no step lists completed codes, and the read step answers the site's su
   assert.equal(parts[CHECK].data.input.input.op, "page");
 });
 
-test("R3: every step after the read step is reached only through the read step", () => {
+test("R3: every step after the read step is reached only through the read step, and the read only through the check of the run's inputs", () => {
   const edges = oas.control_flow_connections ?? [];
   const startId = oas.start_node?.$component_ref;
   assert.ok(startId, "the flow names its start node");
@@ -92,9 +92,14 @@ test("R3: every step after the read step is reached only through the read step",
       queue.push(to);
     }
   }
-  assert.ok(
-    edges.some((edge) => edge.from_node.$component_ref === startId && edge.to_node.$component_ref === READ),
-    "the start leads to the read step",
+  assert.deepEqual(
+    edges.filter((edge) => edge.from_node.$component_ref === startId).map((edge) => edge.to_node.$component_ref),
+    ["check_input"],
+    "the start leads only to the check of the run's inputs",
   );
-  assert.deepEqual([...seen], [startId], "no step is reached from the start without passing the read step");
+  assert.ok(
+    edges.some((edge) => edge.from_node.$component_ref === "check_input" && edge.to_node.$component_ref === READ),
+    "the check of the run's inputs leads to the read step",
+  );
+  assert.deepEqual([...seen], [startId, "check_input"], "no step but the check of the inputs is reached from the start without passing the read step");
 });

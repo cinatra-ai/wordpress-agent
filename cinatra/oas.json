@@ -88,6 +88,9 @@
       "$component_ref": "start"
     },
     {
+      "$component_ref": "check_input"
+    },
+    {
       "$component_ref": "read_page"
     },
     {
@@ -136,9 +139,19 @@
   "control_flow_connections": [
     {
       "component_type": "ControlFlowEdge",
-      "name": "start_to_read_page",
+      "name": "start_to_check_input",
       "from_node": {
         "$component_ref": "start"
+      },
+      "to_node": {
+        "$component_ref": "check_input"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "check_input_to_read_page",
+      "from_node": {
+        "$component_ref": "check_input"
       },
       "to_node": {
         "$component_ref": "read_page"
@@ -411,9 +424,57 @@
   "data_flow_connections": [
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_read_page_instanceId",
+      "name": "start_to_check_input_postId",
       "source_node": {
         "$component_ref": "start"
+      },
+      "source_output": "postId",
+      "destination_node": {
+        "$component_ref": "check_input"
+      },
+      "destination_input": "postId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_check_input_instanceId",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "instanceId",
+      "destination_node": {
+        "$component_ref": "check_input"
+      },
+      "destination_input": "instanceId"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_check_input_postType",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "postType",
+      "destination_node": {
+        "$component_ref": "check_input"
+      },
+      "destination_input": "postType"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_to_check_input_cinatra_run_id",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "cinatra_run_id",
+      "destination_node": {
+        "$component_ref": "check_input"
+      },
+      "destination_input": "cinatra_run_id"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "check_input_to_read_page_instanceId",
+      "source_node": {
+        "$component_ref": "check_input"
       },
       "source_output": "instanceId",
       "destination_node": {
@@ -423,9 +484,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_read_page_postId",
+      "name": "check_input_to_read_page_postId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_input"
       },
       "source_output": "postId",
       "destination_node": {
@@ -579,9 +640,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_check_read_postId",
+      "name": "check_input_to_check_read_postId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_input"
       },
       "source_output": "postId",
       "destination_node": {
@@ -591,9 +652,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_check_read_postType",
+      "name": "check_input_to_check_read_postType",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_input"
       },
       "source_output": "postType",
       "destination_node": {
@@ -603,9 +664,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_check_read_instanceId",
+      "name": "check_input_to_check_read_instanceId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_input"
       },
       "source_output": "instanceId",
       "destination_node": {
@@ -1491,9 +1552,9 @@
     },
     {
       "component_type": "DataFlowEdge",
-      "name": "start_to_write_page_instanceId",
+      "name": "check_input_to_write_page_instanceId",
       "source_node": {
-        "$component_ref": "start"
+        "$component_ref": "check_input"
       },
       "source_output": "instanceId",
       "destination_node": {
@@ -2130,6 +2191,79 @@
         }
       ]
     },
+    "check_input": {
+      "component_type": "ApiNode",
+      "id": "check_input",
+      "name": "check_input",
+      "description": "Checks the run's inputs before any site call: the post id is a canonical positive integer and the site instance id is present. An invalid input ends the run with a plain message and nothing is read.",
+      "metadata": {
+        "cinatra": {
+          "riskClass": "read_only",
+          "requiresApproval": false,
+          "packageName": "@cinatra-ai/wordpress-agent",
+          "description": "The agent checks the run's inputs by code before any site call: the post id must be a whole number from 1 written in digits only, and the WordPress site must be named. Any other input ends the run here; nothing is read, proposed, filed or written."
+        }
+      },
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": {
+        "tool": "extension_tool",
+        "input": {
+          "name": "reviewed_change",
+          "input": {
+            "op": "input",
+            "postId": "{# pyagentspec-input-hint (do not remove): {{ postId }} #}{{ postId | tojson }}",
+            "instanceId": "{# pyagentspec-input-hint (do not remove): {{ instanceId }} #}{{ instanceId | tojson }}",
+            "postType": "{# pyagentspec-input-hint (do not remove): {{ postType }} #}{{ postType | tojson }}"
+          }
+        },
+        "agent_run_id": "{{ cinatra_run_id }}"
+      },
+      "inputs": [
+        {
+          "title": "postId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "instanceId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "postType",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "cinatra_run_id",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "outputs": [
+        {
+          "title": "postId",
+          "type": "integer",
+          "default": 0
+        },
+        {
+          "title": "instanceId",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "postType",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "ok",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    },
     "read_page": {
       "component_type": "ApiNode",
       "id": "read_page",
@@ -2141,7 +2275,7 @@
         "input": {
           "instanceId": "{{ instanceId }}",
           "toolName": "cinatra/post-read",
-          "argsJson": "{# pyagentspec-input-hint (do not remove): {{ postId }} #}{\"post_id\": {{ postId | int | tojson }}}"
+          "argsJson": "{# pyagentspec-input-hint (do not remove): {{ postId }} #}{\"post_id\": {{ postId | tojson }}}"
         },
         "agent_run_id": "{{ agent_run_id }}"
       },
@@ -2153,8 +2287,8 @@
         },
         {
           "title": "postId",
-          "type": "string",
-          "default": ""
+          "type": "integer",
+          "default": 0
         },
         {
           "title": "agent_run_id",
@@ -2321,8 +2455,8 @@
         },
         {
           "title": "postId",
-          "type": "string",
-          "default": ""
+          "type": "integer",
+          "default": 0
         },
         {
           "title": "postType",
