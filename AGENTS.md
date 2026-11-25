@@ -137,20 +137,20 @@ What the review cannot show: a change of white space alone (refused, see
 above), and the post as read is the read step's answer, so the unshown blocks
 equal that answer, not a second read of the site. Plain text also hides
 characters and white space, so one rule applies to each changed block
-(`checkedBlock`), at the form and at the read-back. A changed block that holds
-an invisible character (format and control characters, spaces other than
-U+0020 and U+00A0, line and paragraph separators, other default ignorable
-characters) in the post as read or in the value to save is refused: the agent
+(`checkedBlock`), at the form and at the read-back, byte for byte, with no
+exception and no normalisation. A changed block that holds an invisible
+character (Unicode Cf, Cc except tab, line feed and carriage return, Zs except
+U+0020, so U+00A0 too, Zl, Zp, default ignorable characters and variation
+selectors) in the post as read or in the value to save is refused: the agent
 does not change such a block, a person does it on the site; this freezes
-blocks with joined emoji, soft hyphens or direction marks. Between the
-unchanged start and end of a changed block, every run of white space must be
-one plain space on both sides; in the title and in a content of blocks
-(`<!-- wp:` markup on both sides), outside blocks holding `pre`, `textarea`,
-`code` or a `white-space` style, a run of ASCII white space counts as one space
-first, as the page draws it; the excerpt and a content without block markup
-(the site turns their line breaks into breaks) are taken byte for byte. So a
-line break, a tab, two spaces or a no-break space cannot change inside a shown
-change.
+blocks with joined emoji, emoji variation selectors, soft hyphens, direction
+marks or no-break spaces. In the changed part of a block (between its
+byte-equal start and end, widened so no run of white space is cut), white
+space may only be a single U+0020 between two visible characters: a tab, a
+line break or two spaces there, in text or inside markup such as an attribute,
+is refused. The excerpt shows the block's source, so markup and link targets
+are seen; the agent can change words and markup and add a block written
+without line breaks, but cannot change white space other than single spaces.
 
 ## Draft-revision workflow — CRITICAL asymmetry with Drupal
 
