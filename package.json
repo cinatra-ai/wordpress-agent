@@ -1,6 +1,6 @@
 {
   "name": "@cinatra-ai/wordpress-agent",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "Apache-2.0",
   "description": "Edits WordPress posts from natural language instructions via the WordPress MCP server.",
   "type": "module",
@@ -54,12 +54,6 @@
       {
         "extension": "@cinatra-ai/website-artifacts",
         "objectTypeId": "@cinatra-ai/website-artifacts:page-snapshot"
-      }
-    ],
-    "tools": [
-      {
-        "name": "review_targets",
-        "module": "./cinatra/tools/review-targets.mjs"
       }
     ],
     "lifecycle": {

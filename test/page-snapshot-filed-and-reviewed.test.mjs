@@ -5,7 +5,7 @@
 // Eight arms: S1 the flow's one road; S2 the read step; S3 the compose step and
 // the form it answers; S4 the filing step and the package manifest; S5 the
 // review step and the step that names the filed snapshot to it; S6 the write
-// step; S7 the declared module; S8 the end node.
+// step; S7 no module in the pack; S8 the end node.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -352,15 +352,15 @@ test("S5: the application reviews the filed page snapshot, named to it by the pr
 
   const node = parts[id];
   assert.equal(node.component_type, "ApiNode");
-  assert.equal(node.data.tool, "extension_tool");
-  assert.equal(node.data.input.name, "review_targets");
-  assert.deepEqual(Object.keys(node.data.input.input).sort(), ["op", "reviewTargets"]);
-  assert.equal(node.data.input.input.op, "review");
-  assert.equal(node.data.result_input_passthrough, true);
-  assert.equal(node.data.result_id_field, "ok");
+  assert.equal(node.data.tool, "artifacts_get", "the application's own artifact read, no module of the pack");
+  assert.deepEqual(Object.keys(node.data.input).sort(), ["artifactId", "reviewTargets"]);
+  assert.equal(node.data.input.artifactId, "{{ pageArtifactId }}", "the read names the filed snapshot");
+  assert.equal(node.data.result_input_passthrough, true, "the application gives the input back as the step's result");
   assert.equal(node.data.agent_run_id, "{{ cinatra_run_id }}");
+  assert.deepEqual(titles(node.outputs), ["reviewTargets"]);
+  assert.equal(node.metadata.cinatra.riskClass, "read_only");
 
-  const template = node.data.input.input[named];
+  const template = node.data.input[named];
   assert.equal(typeof template, "string", "one JSON array string, which is what is parsed");
   const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_m, name) => `RENDERED-${name}`);
   const targets = JSON.parse(rendered);
@@ -405,36 +405,12 @@ test("S6: the write step follows the review and takes the reviewed page snapshot
   assert.deepEqual(titles(node.outputs), RUN_OUTPUTS, "the write step keeps its six outputs");
 });
 
-test("S7: the declared module hands the review set to the application and touches nothing else", async () => {
-  assert.deepEqual(pkg.cinatra.tools, [{ name: "review_targets", module: "./cinatra/tools/review-targets.mjs" }]);
-  const { extensionTool } = await import("../cinatra/tools/review-targets.mjs");
-  assert.equal(typeof extensionTool, "function");
-
-  const reference = { artifactId: "artifact-001", representationRevisionId: "revision-001" };
-  const filed = [];
-  const touched = new Set();
-  const ports = new Proxy(
-    { review: { file: (targets) => filed.push(targets) } },
-    {
-      get(target, key, receiver) {
-        touched.add(key);
-        return Reflect.get(target, key, receiver);
-      },
-    },
-  );
-  const result = await extensionTool({
-    input: { op: "review", reviewTargets: JSON.stringify([reference]) },
-    ports,
-  });
-  assert.deepEqual(result, { ok: true });
-  assert.deepEqual(filed, [[reference]], "the parsed set is filed once");
-  assert.deepEqual([...touched].filter((key) => typeof key === "string"), ["review"], "only the review port is read");
-
-  await assert.rejects(
-    extensionTool({ input: { op: "unknown" }, ports: { review: { file: () => {} } } }),
-    Error,
-    "an unknown op is refused",
-  );
+test("S7: the pack declares no module, and no step calls one", () => {
+  assert.equal("tools" in pkg.cinatra, false, "the manifest declares no module");
+  const calls = oas.nodes
+    .map((n) => n.$component_ref)
+    .filter((ref) => parts[ref]?.data?.tool === "extension_tool");
+  assert.deepEqual(calls, [], "no step calls extension_tool");
 });
 
 test("S8: the page snapshot is filed during the run, and the end node binds no artifact", () => {
